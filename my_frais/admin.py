@@ -1,3 +1,229 @@
 from django.contrib import admin
+from django.utils.html import format_html
+from django.urls import reverse
 
-# Register your models here.
+# Ajoute les models de models.py
+from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection
+
+
+class BaseModelAdmin(admin.ModelAdmin):
+    """Classe de base pour l'administration des modèles avec champs communs"""
+    readonly_fields = ('created_at', 'updated_at')
+    
+    def get_readonly_fields(self, request, obj=None):
+        """Rend created_by en lecture seule lors de la modification"""
+        if obj:  # Modification d'un objet existant
+            return self.readonly_fields + ('created_by',)
+        return self.readonly_fields
+    
+    def save_model(self, request, obj, form, change):
+        """Assigne automatiquement l'utilisateur créateur"""
+        if not change:  # Nouvel objet
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(Account)
+class AccountAdmin(BaseModelAdmin):
+    """Administration des comptes bancaires"""
+    list_display = ('nom', 'user', 'solde_formatted', 'nombre_operations', 'created_at', 'created_by')
+    list_filter = ('created_at', 'updated_at', 'user')
+    search_fields = ('nom', 'user__username', 'user__email')
+    ordering = ('-created_at',)
+    
+    fieldsets = (
+        ('Informations du compte', {
+            'fields': ('user', 'nom', 'solde')
+        }),
+        ('Métadonnées', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def solde_formatted(self, obj):
+        """Formatage du solde avec couleur selon le montant"""
+        color = 'green' if obj.solde >= 0 else 'red'
+        return format_html(
+            '<span style="color: {};">{} €</span>',
+            color,
+            f"{obj.solde:.2f}"
+        )
+    solde_formatted.short_description = 'Solde'
+    solde_formatted.admin_order_field = 'solde'
+    
+    def nombre_operations(self, obj):
+        """Compte le nombre d'opérations liées au compte"""
+        count = obj.operations.count()
+        url = reverse('admin:my_frais_operation_changelist') + f'?compte_reference__id__exact={obj.id}'
+        return format_html('<a href="{}">{} opération(s)</a>', url, count)
+    nombre_operations.short_description = 'Opérations'
+
+
+@admin.register(Operation)
+class OperationAdmin(BaseModelAdmin):
+    """Administration des opérations"""
+    list_display = ('description', 'compte_reference', 'montant_formatted', 'date_operation', 'created_by')
+    list_filter = ('date_operation', 'created_at', 'compte_reference', 'compte_reference__user')
+    search_fields = ('description', 'compte_reference__nom', 'compte_reference__user__username')
+    date_hierarchy = 'date_operation'
+    ordering = ('-date_operation', '-created_at')
+    
+    fieldsets = (
+        ('Informations de l\'opération', {
+            'fields': ('compte_reference', 'description', 'montant', 'date_operation')
+        }),
+        ('Métadonnées', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def montant_formatted(self, obj):
+        """Formatage du montant avec couleur selon le signe"""
+        color = 'green' if obj.montant >= 0 else 'red'
+        sign = '+' if obj.montant >= 0 else ''
+        return format_html(
+            '<span style="color: {};">{}{} €</span>',
+            color,
+            sign,
+            f"{obj.montant:.2f}"
+        )
+    montant_formatted.short_description = 'Montant'
+    montant_formatted.admin_order_field = 'montant'
+    
+    def get_queryset(self, request):
+        """Optimise les requêtes avec select_related"""
+        return super().get_queryset(request).select_related('compte_reference', 'compte_reference__user', 'created_by')
+
+
+@admin.register(DirectDebit)
+class DirectDebitAdmin(OperationAdmin):
+    """Administration des prélèvements automatiques"""
+    list_display = ('description', 'compte_reference', 'montant_formatted', 'date_prelevement', 
+                    'frequence', 'actif_status', 'echeance_info', 'created_by')
+    list_filter = ('frequence', 'actif', 'date_prelevement', 'echeance', 'created_at', 
+                   'compte_reference', 'compte_reference__user')
+    search_fields = ('description', 'compte_reference__nom', 'compte_reference__user__username')
+    date_hierarchy = 'date_prelevement'
+    ordering = ('-date_prelevement', '-created_at')
+    
+    # Ajout des champs en lecture seule spécifiques à DirectDebit
+    readonly_fields = ('created_at', 'updated_at', 'date_operation')
+    
+    def get_readonly_fields(self, request, obj=None):
+        """Gère les champs en lecture seule pour DirectDebit"""
+        if obj:  # Modification d'un objet existant
+            return self.readonly_fields + ('created_by',)
+        return self.readonly_fields
+    
+    fieldsets = (
+        ('Informations de base', {
+            'fields': ('compte_reference', 'description', 'montant')
+        }),
+        ('Configuration du prélèvement', {
+            'fields': ('date_prelevement', 'frequence', 'actif', 'echeance'),
+            'description': 'Paramètres spécifiques au prélèvement automatique'
+        }),
+        ('Métadonnées', {
+            'fields': ('date_operation', 'created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def actif_status(self, obj):
+        """Statut actif avec icône"""
+        if obj.actif:
+            return format_html('<span style="color: green;">✓ Actif</span>')
+        else:
+            return format_html('<span style="color: red;">✗ Inactif</span>')
+    actif_status.short_description = 'Statut'
+    actif_status.admin_order_field = 'actif'
+    
+    def echeance_info(self, obj):
+        """Informations sur l'échéance"""
+        if obj.echeance:
+            return format_html(
+                '<span style="color: orange;">📅 {}</span>',
+                obj.echeance.strftime('%d/%m/%Y')
+            )
+        return format_html('<span style="color: gray;">Aucune échéance</span>')
+    echeance_info.short_description = 'Échéance'
+    echeance_info.admin_order_field = 'echeance'
+    
+    actions = ['activer_prelevements', 'desactiver_prelevements']
+    
+    def activer_prelevements(self, request, queryset):
+        """Action pour activer plusieurs prélèvements"""
+        updated = queryset.update(actif=True)
+        self.message_user(request, f'{updated} prélèvement(s) activé(s) avec succès.')
+    activer_prelevements.short_description = "Activer les prélèvements sélectionnés"
+    
+    def desactiver_prelevements(self, request, queryset):
+        """Action pour désactiver plusieurs prélèvements"""
+        updated = queryset.update(actif=False)
+        self.message_user(request, f'{updated} prélèvement(s) désactivé(s) avec succès.')
+    desactiver_prelevements.short_description = "Désactiver les prélèvements sélectionnés"
+
+
+@admin.register(RecurringIncome)
+class RecurringIncomeAdmin(admin.ModelAdmin):
+    """Administration des revenus récurrents"""
+    list_display = ['description', 'type_revenu', 'montant', 'frequence', 'compte_reference', 'actif', 'date_premier_versement', 'date_fin']
+    list_filter = ['type_revenu', 'frequence', 'actif', 'created_at']
+    search_fields = ['description', 'type_revenu', 'compte_reference__nom', 'compte_reference__user__username']
+    readonly_fields = ['created_by', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+    
+    fieldsets = (
+        ('Informations générales', {
+            'fields': ('description', 'type_revenu', 'montant', 'compte_reference')
+        }),
+        ('Récurrence', {
+            'fields': ('frequence', 'date_premier_versement', 'date_fin', 'actif')
+        }),
+        ('Métadonnées', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        })
+    )
+    
+    def save_model(self, request, obj, form, change):
+        if not change:  # Nouvel objet
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(BudgetProjection)
+class BudgetProjectionAdmin(admin.ModelAdmin):
+    """Administration des projections de budget"""
+    list_display = ['compte_reference', 'date_projection', 'periode_projection', 'solde_initial', 'created_at']
+    list_filter = ['periode_projection', 'date_projection', 'created_at']
+    search_fields = ['compte_reference__nom', 'compte_reference__user__username']
+    readonly_fields = ['created_by', 'created_at', 'updated_at', 'projections_data']
+    ordering = ['-created_at']
+    
+    fieldsets = (
+        ('Projection', {
+            'fields': ('compte_reference', 'date_projection', 'periode_projection', 'solde_initial')
+        }),
+        ('Données calculées', {
+            'fields': ('projections_data',),
+            'classes': ('collapse',)
+        }),
+        ('Métadonnées', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        })
+    )
+    
+    def save_model(self, request, obj, form, change):
+        if not change:  # Nouvel objet
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+# Configuration globale de l'admin
+admin.site.site_header = "Administration Mes Frais"
+admin.site.site_title = "Mes Frais Admin"
+admin.site.index_title = "Gestion des comptes et opérations"
