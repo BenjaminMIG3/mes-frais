@@ -651,6 +651,53 @@ class AccountViewSetTestCase(APITestCase):
         
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_global_overview_action(self):
+        """Test de l'action global_overview"""
+        # Ajouter quelques opérations pour des tests plus complets
+        Operation.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('500.00'),
+            description="Test operation 1",
+            created_by=self.user
+        )
+        Operation.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('-100.00'),
+            description="Test operation 2",
+            created_by=self.user
+        )
+        
+        url = '/api/v1/accounts/global_overview/'
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('resume', response.data)
+        self.assertIn('repartition', response.data)
+        self.assertIn('comptes', response.data)
+        self.assertIn('alertes', response.data)
+        
+        # Vérifier la structure du résumé
+        resume = response.data['resume']
+        self.assertIn('total_comptes', resume)
+        self.assertIn('total_solde', resume)
+        self.assertIn('solde_moyen', resume)
+        self.assertIn('total_operations', resume)
+        
+        # Vérifier qu'il y a au moins notre compte
+        self.assertGreaterEqual(resume['total_comptes'], 1)
+        self.assertGreaterEqual(resume['total_operations'], 2)  # Nos 2 opérations de test
+        
+        # Vérifier la structure des comptes
+        comptes = response.data['comptes']
+        self.assertIsInstance(comptes, list)
+        if len(comptes) > 0:
+            compte = comptes[0]
+            self.assertIn('id', compte)
+            self.assertIn('nom', compte)
+            self.assertIn('solde', compte)
+            self.assertIn('status_niveau', compte)
+            self.assertIn('total_operations', compte)
+
 
 class MyFraisIntegrationTestCase(APITestCase):
     """Tests d'intégration pour l'application my_frais"""
@@ -747,3 +794,107 @@ class MyFraisIntegrationTestCase(APITestCase):
         summary_response = self.client.get('/api/v1/accounts/summary/')
         self.assertEqual(summary_response.status_code, status.HTTP_200_OK)
         self.assertEqual(summary_response.data['total_comptes'], 1)
+
+
+class BudgetProjectionAPITestCase(TestCase):
+    """Tests pour l'API des projections budgétaires"""
+    
+    def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.user = User.objects.create_user(
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom="Compte Test",
+            solde=Decimal('1000.00'),
+            created_by=self.user
+        )
+        self.client.force_authenticate(user=self.user)
+    
+    def test_dashboard_with_different_periods(self):
+        """Test du dashboard avec différentes périodes de projection"""
+        # Test avec 3 mois (défaut)
+        response = self.client.get('/api/v1/budget-projections/dashboard/')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projections']['periode_mois'], 3)
+        self.assertEqual(len(data['projections']['tendance_mois']), 3)
+        
+        # Test avec 6 mois
+        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=6')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projections']['periode_mois'], 6)
+        self.assertEqual(len(data['projections']['tendance_mois']), 6)
+        
+        # Test avec 12 mois
+        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=12')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projections']['periode_mois'], 12)
+        self.assertEqual(len(data['projections']['tendance_mois']), 12)
+    
+    def test_quick_projection_with_different_periods(self):
+        """Test de la projection rapide avec différentes périodes"""
+        # Test avec 3 mois
+        response = self.client.post('/api/v1/budget-projections/quick_projection/', {
+            'compte_id': self.account.id,
+            'periode_mois': 3
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projection']['periode_mois'], 3)
+        
+        # Test avec 6 mois (défaut)
+        response = self.client.post('/api/v1/budget-projections/quick_projection/', {
+            'compte_id': self.account.id
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projection']['periode_mois'], 6)
+        
+        # Test avec 12 mois
+        response = self.client.post('/api/v1/budget-projections/quick_projection/', {
+            'compte_id': self.account.id,
+            'periode_mois': 12
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projection']['periode_mois'], 12)
+    
+    def test_compare_scenarios_with_different_periods(self):
+        """Test de la comparaison de scénarios avec différentes périodes"""
+        # Test avec 6 mois
+        response = self.client.get(f'/api/v1/budget-projections/compare_scenarios/?compte_id={self.account.id}&periode_mois=6')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['periode_mois'], 6)
+        
+        # Test avec 12 mois (défaut)
+        response = self.client.get(f'/api/v1/budget-projections/compare_scenarios/?compte_id={self.account.id}')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['periode_mois'], 12)
+        
+        # Test avec 24 mois
+        response = self.client.get(f'/api/v1/budget-projections/compare_scenarios/?compte_id={self.account.id}&periode_mois=24')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['periode_mois'], 24)
+    
+    def test_projection_period_validation(self):
+        """Test de la validation des limites de période"""
+        # Test avec période trop élevée (> 60 mois)
+        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=100')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projections']['periode_mois'], 60)  # Limitée à 60
+        
+        # Test avec période trop faible (< 1 mois)
+        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=0')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['projections']['periode_mois'], 1)  # Limitée à 1

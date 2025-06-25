@@ -3,11 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Q
+from django.db.models import Q, Sum, Avg
 from datetime import date, timedelta
 from decimal import Decimal
 
-from my_frais.models import BudgetProjection, Account, DirectDebit, RecurringIncome
+from my_frais.models import BudgetProjection, Account, DirectDebit, RecurringIncome, Operation
 from my_frais.serializers.budget_projection_serializer import (
     BudgetProjectionSerializer, BudgetProjectionCalculatorSerializer, BudgetSummarySerializer
 )
@@ -107,14 +107,23 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         """Tableau de bord avec les indicateurs clés"""
         user = request.user
         
+        # Paramètre pour la période de projection (défaut: 3 mois)
+        periode_projection = int(request.query_params.get('periode_mois', 3))
+        if periode_projection > 60:  # Limite à 5 ans
+            periode_projection = 60
+        elif periode_projection < 1:
+            periode_projection = 1
+        
         if user.is_staff:
             comptes = Account.objects.all()
             prelevements = DirectDebit.objects.filter(actif=True)
             revenus = RecurringIncome.objects.filter(actif=True)
+            operations = Operation.objects.all()
         else:
             comptes = Account.objects.filter(user=user)
             prelevements = DirectDebit.objects.filter(compte_reference__user=user, actif=True)
             revenus = RecurringIncome.objects.filter(compte_reference__user=user, actif=True)
+            operations = Operation.objects.filter(compte_reference__user=user)
         
         # Calculs des totaux
         solde_total = sum(compte.solde for compte in comptes)
@@ -123,11 +132,11 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         prelevements_mensuels = Decimal('0.00')
         for prelevement in prelevements:
             if prelevement.frequence == 'Mensuel':
-                prelevements_mensuels += prelevement.montant
+                prelevements_mensuels += abs(prelevement.montant)
             elif prelevement.frequence == 'Trimestriel':
-                prelevements_mensuels += prelevement.montant / Decimal('3')
+                prelevements_mensuels += abs(prelevement.montant) / Decimal('3')
             elif prelevement.frequence == 'Annuel':
-                prelevements_mensuels += prelevement.montant / Decimal('12')
+                prelevements_mensuels += abs(prelevement.montant) / Decimal('12')
         
         # Revenus mensuels équivalents
         revenus_mensuels = Decimal('0.00')
@@ -143,8 +152,54 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         
         solde_mensuel_estime = revenus_mensuels - prelevements_mensuels
         
+        # Statistiques d'activité (7, 30 et 90 jours)
+        today = date.today()
+        week_ago = today - timedelta(days=7)
+        month_ago = today - timedelta(days=30)
+        quarter_ago = today - timedelta(days=90)
+        
+        operations_semaine = operations.filter(created_at__date__gte=week_ago)
+        operations_mois = operations.filter(created_at__date__gte=month_ago)
+        operations_trimestre = operations.filter(created_at__date__gte=quarter_ago)
+        
+        activite_stats = {
+            'operations_7j': {
+                'count': operations_semaine.count(),
+                'montant_total': float(operations_semaine.aggregate(total=Sum('montant'))['total'] or 0),
+                'montant_positif': float(operations_semaine.filter(montant__gt=0).aggregate(total=Sum('montant'))['total'] or 0),
+                'montant_negatif': float(operations_semaine.filter(montant__lt=0).aggregate(total=Sum('montant'))['total'] or 0)
+            },
+            'operations_30j': {
+                'count': operations_mois.count(),
+                'montant_total': float(operations_mois.aggregate(total=Sum('montant'))['total'] or 0),
+                'montant_positif': float(operations_mois.filter(montant__gt=0).aggregate(total=Sum('montant'))['total'] or 0),
+                'montant_negatif': float(operations_mois.filter(montant__lt=0).aggregate(total=Sum('montant'))['total'] or 0)
+            },
+            'operations_90j': {
+                'count': operations_trimestre.count(),
+                'montant_total': float(operations_trimestre.aggregate(total=Sum('montant'))['total'] or 0),
+                'montant_positif': float(operations_trimestre.filter(montant__gt=0).aggregate(total=Sum('montant'))['total'] or 0),
+                'montant_negatif': float(operations_trimestre.filter(montant__lt=0).aggregate(total=Sum('montant'))['total'] or 0)
+            }
+        }
+        
+        # Répartition des comptes
+        comptes_details = []
+        for compte in comptes:
+            compte_operations = operations.filter(compte_reference=compte)
+            derniere_operation = compte_operations.order_by('-created_at').first()
+            
+            comptes_details.append({
+                'id': compte.id,
+                'nom': compte.nom,
+                'solde': float(compte.solde),
+                'nombre_operations': compte_operations.count(),
+                'derniere_activite': derniere_operation.created_at.isoformat() if derniere_operation else None,
+                'status': 'positif' if compte.solde >= 0 else 'negatif'
+            })
+        
         # Prochaines échéances (30 jours)
-        date_limite = date.today() + timedelta(days=30)
+        date_limite = today + timedelta(days=30)
         
         prochains_prelevements = []
         for prelevement in prelevements:
@@ -153,10 +208,12 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 prochains_prelevements.append({
                     'id': prelevement.id,
                     'description': prelevement.description,
-                    'montant': float(prelevement.montant),
+                    'montant': float(abs(prelevement.montant)),
                     'date': next_occurrence.isoformat(),
-                    'jours_restants': (next_occurrence - date.today()).days,
-                    'compte': prelevement.compte_reference.nom
+                    'jours_restants': (next_occurrence - today).days,
+                    'compte': prelevement.compte_reference.nom,
+                    'frequence': prelevement.frequence,
+                    'type': 'prelevement'
                 })
         
         prochains_revenus = []
@@ -166,27 +223,55 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 prochains_revenus.append({
                     'id': revenu.id,
                     'description': revenu.description,
-                    'type': revenu.type_revenu,
+                    'type_revenu': revenu.type_revenu,
                     'montant': float(revenu.montant),
                     'date': next_occurrence.isoformat(),
-                    'jours_restants': (next_occurrence - date.today()).days,
-                    'compte': revenu.compte_reference.nom
+                    'jours_restants': (next_occurrence - today).days,
+                    'compte': revenu.compte_reference.nom,
+                    'frequence': revenu.frequence,
+                    'type': 'revenu'
                 })
         
         # Trier par date
         prochains_prelevements.sort(key=lambda x: x['date'])
         prochains_revenus.sort(key=lambda x: x['date'])
         
-        # Comptes en déficit potentiel
+        # Comptes en déficit potentiel et alertes
         comptes_alerte = []
+        alertes_urgentes = []
+        
         for compte in comptes:
-            if compte.solde < prelevements_mensuels:
+            if compte.solde < 0:
                 comptes_alerte.append({
                     'id': compte.id,
                     'nom': compte.nom,
                     'solde': float(compte.solde),
-                    'deficit_potentiel': float(prelevements_mensuels - compte.solde)
+                    'niveau': 'critique'
                 })
+                alertes_urgentes.append(f"Compte '{compte.nom}' en déficit: {compte.solde}€")
+            elif compte.solde < prelevements_mensuels / 2:  # Moins de la moitié des prélèvements mensuels
+                comptes_alerte.append({
+                    'id': compte.id,
+                    'nom': compte.nom,
+                    'solde': float(compte.solde),
+                    'niveau': 'attention'
+                })
+        
+        # Prélèvements dans les 7 prochains jours (urgence)
+        prelevements_urgents = [p for p in prochains_prelevements if p['jours_restants'] <= 7]
+        for prelevement in prelevements_urgents:
+            alertes_urgentes.append(f"Prélèvement '{prelevement['description']}' dans {prelevement['jours_restants']} jours")
+        
+        # Évolution des soldes (projection dynamique selon la période demandée)
+        projection_mois = []
+        solde_actuel = solde_total
+        for mois in range(periode_projection):
+            solde_actuel += revenus_mensuels - prelevements_mensuels
+            projection_mois.append({
+                'mois': mois + 1,
+                'solde_projete': float(solde_actuel),
+                'variation': float(revenus_mensuels - prelevements_mensuels)
+            })
         
         return Response({
             'overview': {
@@ -195,11 +280,20 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 'revenus_mensuels': float(revenus_mensuels),
                 'prelevements_mensuels': float(prelevements_mensuels),
                 'solde_mensuel_estime': float(solde_mensuel_estime),
-                'status': 'positif' if solde_mensuel_estime > 0 else 'negatif'
+                'status': 'positif' if solde_mensuel_estime > 0 else 'negatif',
+                'sante_financiere': 'excellente' if solde_total > prelevements_mensuels * 3 else 
+                                   'bonne' if solde_total > prelevements_mensuels else
+                                   'fragile' if solde_total > 0 else 'critique'
             },
+            'activite_recente': activite_stats,
+            'comptes': comptes_details,
             'alertes': {
-                'comptes_en_deficit': len(comptes_alerte),
-                'comptes_details': comptes_alerte
+                'niveau_urgence': 'critique' if len([c for c in comptes_alerte if c['niveau'] == 'critique']) > 0 else
+                                'attention' if len(comptes_alerte) > 0 else 'normal',
+                'comptes_en_alerte': len(comptes_alerte),
+                'comptes_details': comptes_alerte,
+                'messages_urgents': alertes_urgentes[:5],  # Limiter à 5 messages
+                'prelevements_urgents': len(prelevements_urgents)
             },
             'prochaines_echeances': {
                 'prelevements_30j': {
@@ -212,13 +306,32 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                     'montant_total': sum(r['montant'] for r in prochains_revenus),
                     'details': prochains_revenus[:10]  # Limiter à 10
                 }
+            },
+            'projections': {
+                'periode_mois': periode_projection,
+                'tendance_mois': projection_mois,
+                'capacite_epargne_mensuelle': float(max(0, solde_mensuel_estime)),
+                'mois_avant_deficit': int(solde_total / abs(solde_mensuel_estime)) if solde_mensuel_estime < 0 else None
+            },
+            'metriques': {
+                'ratio_revenus_prelevements': float(revenus_mensuels / prelevements_mensuels) if prelevements_mensuels > 0 else float('inf'),
+                'couverture_solde_mois': float(solde_total / prelevements_mensuels) if prelevements_mensuels > 0 else float('inf'),
+                'total_operations_mois': operations_mois.count(),
+                'moyenne_operation': float(operations_mois.aggregate(avg=Avg('montant'))['avg'] or 0) if operations_mois.count() > 0 else 0
             }
         })
     
     @action(detail=False, methods=['post'])
     def quick_projection(self, request):
-        """Projection rapide pour les 6 prochains mois"""
+        """Projection rapide paramétrable (défaut: 6 mois)"""
         compte_id = request.data.get('compte_id')
+        periode_mois = int(request.data.get('periode_mois', 6))  # Défaut: 6 mois
+        
+        # Validation de la période
+        if periode_mois > 60:  # Limite à 5 ans
+            periode_mois = 60
+        elif periode_mois < 1:
+            periode_mois = 1
         
         if not compte_id:
             return Response(
@@ -240,12 +353,12 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Calculer la projection rapide
+        # Calculer la projection rapide avec la période spécifiée
         calculator = BudgetProjectionCalculatorSerializer(context={'request': request})
         projections = calculator.calculate_projections(
             compte=compte,
             date_debut=date.today(),
-            periode_mois=6,
+            periode_mois=periode_mois,
             inclure_prelevements=True,
             inclure_revenus=True
         )
@@ -257,7 +370,8 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 'nom': compte.nom,
                 'solde_actuel': float(compte.solde)
             },
-            'projection_6_mois': {
+            'projection': {
+                'periode_mois': periode_mois,
                 'solde_final': projections['solde_final_projete'],
                 'variation_totale': projections['variation_totale'],
                 'revenus_totaux': projections['resume']['revenus_totaux'],
@@ -277,6 +391,13 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
     def compare_scenarios(self, request):
         """Comparer différents scénarios de projection"""
         compte_id = request.query_params.get('compte_id')
+        periode_mois = int(request.query_params.get('periode_mois', 12))  # Défaut: 12 mois
+        
+        # Validation de la période
+        if periode_mois > 60:  # Limite à 5 ans
+            periode_mois = 60
+        elif periode_mois < 1:
+            periode_mois = 1
         
         if not compte_id:
             return Response(
@@ -302,19 +423,19 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         
         # Scénario 1: Avec tout (baseline)
         scenario_complet = calculator.calculate_projections(
-            compte=compte, date_debut=date.today(), periode_mois=12,
+            compte=compte, date_debut=date.today(), periode_mois=periode_mois,
             inclure_prelevements=True, inclure_revenus=True
         )
         
         # Scénario 2: Uniquement les prélèvements
         scenario_prelevements = calculator.calculate_projections(
-            compte=compte, date_debut=date.today(), periode_mois=12,
+            compte=compte, date_debut=date.today(), periode_mois=periode_mois,
             inclure_prelevements=True, inclure_revenus=False
         )
         
         # Scénario 3: Uniquement les revenus
         scenario_revenus = calculator.calculate_projections(
-            compte=compte, date_debut=date.today(), periode_mois=12,
+            compte=compte, date_debut=date.today(), periode_mois=periode_mois,
             inclure_prelevements=False, inclure_revenus=True
         )
         
@@ -324,6 +445,7 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 'nom': compte.nom,
                 'solde_actuel': float(compte.solde)
             },
+            'periode_mois': periode_mois,
             'scenarios': {
                 'complet': {
                     'nom': 'Projection complète',

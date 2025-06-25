@@ -91,6 +91,7 @@ Détail | GET | **accounts/{id}/**
 Mettre à jour | PUT/PATCH | **accounts/{id}/**
 Supprimer | DELETE | **accounts/{id}/**
 Résumé global | GET | **accounts/summary/**
+Vue d'ensemble complète | GET | **accounts/global_overview/**
 Opérations associées | GET | **accounts/{id}/operations/**
 Statistiques | GET | **accounts/{id}/statistics/**
 Ajuster le solde | POST | **accounts/{id}/adjust_balance/**
@@ -169,10 +170,12 @@ L'API utilise un système d'authentification JWT (JSON Web Tokens) personnalisé
 ##### **POST /api/v1/auth/login/**
 **Connexion utilisateur**
 
+**Note :** Le champ `username` correspond au nom d'utilisateur (qui peut être différent de l'email). L'email est un champ séparé.
+
 **Corps de la requête :**
 ```json
 {
-  "username": "user@example.com",
+  "username": "nom_utilisateur",
   "password": "motdepasse123"
 }
 ```
@@ -185,7 +188,7 @@ L'API utilise un système d'authentification JWT (JSON Web Tokens) personnalisé
   "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
   "user": {
     "id": 1,
-    "username": "user@example.com",
+    "username": "nom_utilisateur",
     "email": "user@example.com"
   }
 }
@@ -201,7 +204,7 @@ L'API utilise un système d'authentification JWT (JSON Web Tokens) personnalisé
 **Corps de la requête :**
 ```json
 {
-  "username": "nouveau@example.com",
+  "username": "nouvel_utilisateur",
   "password": "motdepasse123",
   "email": "nouveau@example.com"
 }
@@ -215,7 +218,7 @@ L'API utilise un système d'authentification JWT (JSON Web Tokens) personnalisé
   "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
   "user": {
     "id": 2,
-    "username": "nouveau@example.com",
+    "username": "nouvel_utilisateur",
     "email": "nouveau@example.com"
   }
 }
@@ -270,7 +273,7 @@ Authorization: Bearer <access_token>
 {
   "user": {
     "id": 1,
-    "username": "user@example.com",
+    "username": "nom_utilisateur",
     "email": "user@example.com",
     "first_name": "Prénom",
     "last_name": "Nom",
@@ -510,4 +513,736 @@ Hérite de `Operation` et ajoute les champs suivants :
 - **Taille de texte** : Support du zoom jusqu'à 200%
 - **Couleurs** : Pas d'information véhiculée uniquement par la couleur
 
-Ce document sera mis à jour au fur et à mesure des évolutions de l'API. 
+Ce document sera mis à jour au fur et à mesure des évolutions de l'API.
+
+---
+
+## 6. Endpoints de statistiques pour Dashboard
+
+### 6.1 Vue d'ensemble des comptes
+
+#### **GET /api/v1/accounts/summary/**
+**Résumé basique des comptes de l'utilisateur**
+
+**Réponse :**
+```json
+{
+  "total_comptes": 3,
+  "total_solde": 42488.44,
+  "comptes_negatifs": 0,
+  "comptes_positifs": 3
+}
+```
+
+#### **GET /api/v1/accounts/global_overview/**
+**Vue d'ensemble complète des comptes pour dashboard principal**
+
+**Réponse :**
+```json
+{
+  "resume": {
+    "total_comptes": 3,
+    "total_solde": 42488.44,
+    "solde_moyen": 14162.81,
+    "solde_maximum": 19944.49,
+    "solde_minimum": 10610.55,
+    "comptes_positifs": 3,
+    "comptes_negatifs": 0,
+    "total_operations": 87,
+    "derniere_activite_globale": "2025-06-25T12:17:56.540252+00:00"
+  },
+  "repartition": {
+    "excellent": 3,
+    "bon": 0,
+    "attention": 0,
+    "critique": 0
+  },
+  "comptes": [
+    {
+      "id": 52,
+      "nom": "PEL Banque Populaire",
+      "solde": 19944.49,
+      "status": "positif",
+      "status_niveau": "excellent",
+      "total_operations": 29,
+      "operations_30j": 29,
+      "variation_30j": 18944.49,
+      "derniere_activite": "2025-06-25T12:17:56.540252+00:00",
+      "prelevements_actifs": 2,
+      "revenus_actifs": 1,
+      "created_at": "2025-06-25T12:17:55.675585+00:00"
+    }
+  ],
+  "alertes": {
+    "comptes_critiques": 0,
+    "comptes_attention": 0,
+    "comptes_inactifs": 0,
+    "necessite_attention": false
+  }
+}
+```
+
+### 6.2 Dashboard complet (recommandé)
+
+#### **GET /api/v1/budget-projections/dashboard/**
+**Tableau de bord complet avec toutes les métriques**
+
+**Paramètres de requête optionnels :**
+- `periode_mois` : Nombre de mois pour la projection (défaut: 3, max: 60)
+
+**Réponse :**
+```json
+{
+  "overview": {
+    "comptes_count": 3,
+    "solde_total": 42488.44,
+    "revenus_mensuels": 5884.07,
+    "prelevements_mensuels": 856.33,
+    "solde_mensuel_estime": 5027.74,
+    "status": "positif",
+    "sante_financiere": "excellente"
+  },
+  "activite_recente": {
+    "operations_7j": {
+      "count": 87,
+      "montant_total": 41488.44,
+      "montant_positif": 48260.32,
+      "montant_negatif": -6771.88
+    },
+    "operations_30j": { /* même structure */ },
+    "operations_90j": { /* même structure */ }
+  },
+  "comptes": [
+    {
+      "id": 52,
+      "nom": "PEL Banque Populaire",
+      "solde": 19944.49,
+      "nombre_operations": 29,
+      "derniere_activite": "2025-06-25T12:17:56.540252+00:00",
+      "status": "positif"
+    }
+  ],
+  "alertes": {
+    "niveau_urgence": "normal",
+    "comptes_en_alerte": 0,
+    "comptes_details": [],
+    "messages_urgents": [],
+    "prelevements_urgents": 0
+  },
+  "prochaines_echeances": {
+    "prelevements_30j": {
+      "count": 2,
+      "montant_total": 856.33,
+      "details": [
+        {
+          "id": 1,
+          "description": "Électricité EDF",
+          "montant": 85.50,
+          "date": "2025-07-15",
+          "jours_restants": 20,
+          "compte": "Compte Courant",
+          "frequence": "Mensuel",
+          "type": "prelevement"
+        }
+      ]
+    },
+    "revenus_30j": {
+      "count": 1,
+      "montant_total": 2500.00,
+      "details": [
+        {
+          "id": 1,
+          "description": "Salaire Net",
+          "type_revenu": "Salaire",
+          "montant": 2500.00,
+          "date": "2025-07-01",
+          "jours_restants": 6,
+          "compte": "Compte Courant",
+          "frequence": "Mensuel",
+          "type": "revenu"
+        }
+      ]
+    }
+  },
+  "projections": {
+    "periode_mois": 3,
+    "tendance_mois": [
+      {
+        "mois": 1,
+        "solde_projete": 47516.18,
+        "variation": 5027.74
+      },
+      {
+        "mois": 2,
+        "solde_projete": 52543.92,
+        "variation": 5027.74
+      },
+      {
+        "mois": 3,
+        "solde_projete": 57571.66,
+        "variation": 5027.74
+      }
+    ],
+    "capacite_epargne_mensuelle": 5027.74,
+    "mois_avant_deficit": null
+  },
+  "metriques": {
+    "ratio_revenus_prelevements": 6.87,
+    "couverture_solde_mois": 49.64,
+    "total_operations_mois": 87,
+    "moyenne_operation": 476.98
+  }
+}
+```
+
+### 6.3 Statistiques par module
+
+#### **GET /api/v1/operations/statistics/**
+**Statistiques détaillées des opérations**
+
+```json
+{
+  "statistics": {
+    "total_operations": 87,
+    "total_montant": 41488.44,
+    "operations_30_jours": 87,
+    "montant_30_jours": 41488.44,
+    "operations_7_jours": 87,
+    "montant_7_jours": 41488.44,
+    "operations_positives": 58,
+    "montant_positif": 48260.32,
+    "operations_negatives": 29,
+    "montant_negatif": -6771.88
+  }
+}
+```
+
+#### **GET /api/v1/direct-debits/statistics/**
+**Statistiques des prélèvements automatiques**
+
+```json
+{
+  "statistics": {
+    "total_prélèvements": 7,
+    "total_montant": 2569.00,
+    "prélèvements_actifs": 7,
+    "montant_actifs": 2569.00,
+    "prélèvements_expirés": 0,
+    "montant_expirés": 0.00,
+    "prélèvements_ce_mois": 0,
+    "montant_ce_mois": 0.00
+  }
+}
+```
+
+#### **GET /api/v1/recurring-incomes/statistics/**
+**Statistiques des revenus récurrents**
+
+```json
+{
+  "statistics": {
+    "total_revenus": 4,
+    "revenus_actifs": 4,
+    "montant_mensuel_equivalent": 5884.07,
+    "montant_annuel_equivalent": 70608.84,
+    "par_type": {
+      "Salaire": {"count": 2, "montant_total": 7218.41},
+      "Subvention": {"count": 1, "montant_total": 205.68},
+      "Aide": {"count": 1, "montant_total": 487.47},
+      "Pension": {"count": 0, "montant_total": 0},
+      "Loyer": {"count": 0, "montant_total": 0},
+      "Autre": {"count": 0, "montant_total": 0}
+    },
+    "par_frequence": {
+      "Hebdomadaire": 0,
+      "Mensuel": 4,
+      "Trimestriel": 0,
+      "Annuel": 0
+    }
+  }
+}
+```
+
+### 6.4 Projections et analyses détaillées
+
+#### **POST /api/v1/budget-projections/calculate/**
+**Calcul de projection complète en temps réel (sans sauvegarde)**
+
+**Description :** Cet endpoint permet de calculer des projections budgétaires détaillées avec toutes les données mensuelles. Il est idéal pour l'analyse approfondie et les graphiques.
+
+**Corps de la requête :**
+```json
+{
+  "compte_reference": 52,
+  "date_debut": "2025-01-01",
+  "periode_mois": 6,
+  "inclure_prelevements": true,
+  "inclure_revenus": true
+}
+```
+
+**Paramètres :**
+- `compte_reference` : ID du compte (requis)
+- `date_debut` : Date de début de la projection (optionnel, défaut: aujourd'hui)
+- `periode_mois` : Nombre de mois à projeter (optionnel, défaut: 12, max: 60)
+- `inclure_prelevements` : Inclure les prélèvements automatiques (optionnel, défaut: true)
+- `inclure_revenus` : Inclure les revenus récurrents (optionnel, défaut: true)
+
+**Réponse complète :**
+```json
+{
+  "compte_id": 52,
+  "compte_nom": "PEL Banque Populaire",
+  "solde_initial": 19944.49,
+  "solde_final_projete": 50110.93,
+  "variation_totale": 30166.44,
+  "date_debut": "2025-01-01",
+  "date_fin": "2025-07-01",
+  "periode_mois": 6,
+  "projections_mensuelles": [
+    {
+      "mois": 1,
+      "date_debut": "2025-01-01",
+      "date_fin": "2025-01-31",
+      "solde_debut": 19944.49,
+      "solde_fin": 22644.49,
+      "total_revenus": 3200.00,
+      "total_prelevements": 500.00,
+      "variation": 2700.00,
+      "transactions": [
+        {
+          "date": "2025-01-01",
+          "montant": 2500.00,
+          "description": "Salaire Net",
+          "type": "revenu"
+        },
+        {
+          "date": "2025-01-15",
+          "montant": -85.50,
+          "description": "Électricité EDF",
+          "type": "prelevement"
+        }
+      ]
+    },
+    {
+      "mois": 2,
+      "date_debut": "2025-02-01",
+      "date_fin": "2025-02-28",
+      "solde_debut": 22644.49,
+      "solde_fin": 25344.49,
+      "total_revenus": 3200.00,
+      "total_prelevements": 500.00,
+      "variation": 2700.00,
+      "transactions": [...]
+    }
+  ],
+  "resume": {
+    "revenus_totaux": 19200.00,
+    "prelevements_totaux": 3000.00,
+    "solde_minimum": 19944.49,
+    "solde_maximum": 50110.93,
+    "mois_solde_negatif": 0
+  }
+}
+```
+
+**💡 Comment utiliser ces données :**
+
+##### **Pour un graphique d'évolution du solde :**
+```javascript
+// Extraire les données pour un graphique
+const chartData = response.projections_mensuelles.map(mois => ({
+  periode: `${mois.date_debut.substring(0,7)}`, // "2025-01"
+  solde: mois.solde_fin,
+  revenus: mois.total_revenus,
+  depenses: mois.total_prelevements
+}));
+```
+
+##### **Pour détecter les mois critiques :**
+```javascript
+// Identifier les mois avec solde négatif
+const moisCritiques = response.projections_mensuelles
+  .filter(mois => mois.solde_fin < 0)
+  .map(mois => ({
+    periode: mois.mois,
+    solde: mois.solde_fin,
+    deficit: Math.abs(mois.solde_fin)
+  }));
+```
+
+##### **Pour calculer la capacité d'épargne :**
+```javascript
+// Capacité d'épargne moyenne par mois
+const capaciteEpargne = response.projections_mensuelles
+  .map(mois => mois.variation)
+  .reduce((sum, variation) => sum + variation, 0) / response.periode_mois;
+```
+
+#### **POST /api/v1/budget-projections/quick_projection/**
+**Projection rapide paramétrable pour un compte**
+
+**Description :** Version simplifiée pour obtenir rapidement les informations essentielles sans le détail mensuel.
+
+**Corps de la requête :**
+```json
+{
+  "compte_id": 52,
+  "periode_mois": 6
+}
+```
+
+**Note :** Le paramètre `periode_mois` est optionnel (défaut: 6, max: 60).
+
+**Réponse :**
+```json
+{
+  "compte": {
+    "id": 52,
+    "nom": "PEL Banque Populaire",
+    "solde_actuel": 19944.49
+  },
+  "projection": {
+    "periode_mois": 6,
+    "solde_final": 50110.93,
+    "variation_totale": 30166.44,
+    "revenus_totaux": 35304.42,
+    "prelevements_totaux": 5137.98,
+    "solde_minimum": 19944.49,
+    "mois_solde_negatif": 0
+  },
+  "alertes": {
+    "deficit_prevu": false,
+    "amelioration": true
+  }
+}
+```
+
+**💡 Utilisation recommandée :**
+- **Cartes de résumé** : Utilisez `projection.solde_final` et `projection.variation_totale`
+- **Indicateurs de santé** : Utilisez `alertes.deficit_prevu` et `projection.mois_solde_negatif`
+- **Alertes visuelles** : Rouge si `deficit_prevu = true`, vert si `amelioration = true`
+
+#### **GET /api/v1/budget-projections/dashboard/**
+**Tableau de bord complet avec projections intégrées**
+
+**Description :** Endpoint principal pour obtenir une vue d'ensemble complète avec projections, alertes et métriques.
+
+**Paramètres de requête optionnels :**
+- `periode_mois` : Nombre de mois pour la projection (défaut: 3, max: 60)
+
+**Exemple d'usage :**
+```
+GET /api/v1/budget-projections/dashboard/?periode_mois=6
+```
+
+**Structure de réponse (partie projections) :**
+```json
+{
+  "overview": {
+    "solde_total": 42488.44,
+    "revenus_mensuels": 5884.07,
+    "prelevements_mensuels": 856.33,
+    "solde_mensuel_estime": 5027.74,
+    "sante_financiere": "excellente"
+  },
+  "projections": {
+    "periode_mois": 6,
+    "tendance_mois": [
+      {
+        "mois": 1,
+        "solde_projete": 47516.18,
+        "variation": 5027.74
+      },
+      {
+        "mois": 2,
+        "solde_projete": 52543.92,
+        "variation": 5027.74
+      },
+      {
+        "mois": 6,
+        "solde_projete": 72654.40,
+        "variation": 5027.74
+      }
+    ],
+    "capacite_epargne_mensuelle": 5027.74,
+    "mois_avant_deficit": null
+  }
+}
+```
+
+**💡 Utilisation du dashboard :**
+
+##### **Graphique de tendance simple :**
+```javascript
+// Données pour graphique linéaire
+const trendData = response.projections.tendance_mois.map((mois, index) => ({
+  x: index + 1,
+  y: mois.solde_projete,
+  label: `Mois ${mois.mois}`
+}));
+```
+
+##### **Indicateurs de performance :**
+```javascript
+// Calculs d'indicateurs
+const performanceIndicators = {
+  croissanceMoyenne: response.projections.capacite_epargne_mensuelle,
+  croissanceTotale: response.projections.tendance_mois[response.projections.tendance_mois.length - 1].solde_projete - response.overview.solde_total,
+  statusFinancier: response.overview.sante_financiere,
+  alerteDeficit: response.projections.mois_avant_deficit !== null
+};
+```
+
+#### **GET /api/v1/budget-projections/compare_scenarios/**
+**Comparer différents scénarios de projection**
+
+**Description :** Analyse comparative pour visualiser l'impact des revenus et prélèvements séparément.
+
+**Paramètres de requête :**
+- `compte_id` : ID du compte (requis)
+- `periode_mois` : Nombre de mois pour la projection (optionnel, défaut: 12, max: 60)
+
+**Exemple d'usage :**
+```
+GET /api/v1/budget-projections/compare_scenarios/?compte_id=52&periode_mois=12
+```
+
+**Réponse :**
+```json
+{
+  "compte": {
+    "id": 52,
+    "nom": "PEL Banque Populaire",
+    "solde_actuel": 19944.49
+  },
+  "periode_mois": 12,
+  "scenarios": {
+    "complet": {
+      "nom": "Projection complète",
+      "solde_final": 75000.50,
+      "variation": 55056.01,
+      "solde_minimum": 19944.49,
+      "mois_deficit": 0
+    },
+    "prelevements_seulement": {
+      "nom": "Prélèvements uniquement",
+      "solde_final": 15000.25,
+      "variation": -4944.24,
+      "solde_minimum": 12500.00,
+      "mois_deficit": 0
+    },
+    "revenus_seulement": {
+      "nom": "Revenus uniquement",
+      "solde_final": 90000.75,
+      "variation": 70056.26,
+      "solde_minimum": 19944.49,
+      "mois_deficit": 0
+    }
+  }
+}
+```
+
+**💡 Analyse des scénarios :**
+
+##### **Impact des revenus vs prélèvements :**
+```javascript
+// Calculer l'impact de chaque composante
+const impactAnalysis = {
+  impactRevenus: response.scenarios.revenus_seulement.variation,
+  impactPrelevements: Math.abs(response.scenarios.prelevements_seulement.variation),
+  beneficeNet: response.scenarios.complet.variation,
+  ratioPositivite: response.scenarios.revenus_seulement.variation / Math.abs(response.scenarios.prelevements_seulement.variation)
+};
+```
+
+##### **Détection de risques :**
+```javascript
+// Identifier les risques financiers
+const riskAssessment = {
+  risqueDeficit: response.scenarios.prelevements_seulement.mois_deficit > 0,
+  dependanceRevenus: response.scenarios.complet.solde_minimum <= response.compte.solde_actuel,
+  margeSecurite: response.scenarios.complet.solde_minimum - response.compte.solde_actuel
+};
+```
+
+### 6.5 Données regroupées
+
+#### **GET /api/v1/operations/by_account/**
+**Opérations groupées par compte**
+
+#### **GET /api/v1/direct-debits/by_account/**
+**Prélèvements groupés par compte**
+
+#### **GET /api/v1/recurring-incomes/by_account/**
+**Revenus récurrents groupés par compte**
+
+### 6.6 Guide d'utilisation pratique des projections
+
+#### **Stratégie d'endpoints selon le cas d'usage :**
+
+##### **🏠 Dashboard principal d'accueil :**
+```javascript
+// Appel initial pour vue d'ensemble
+GET /api/v1/budget-projections/dashboard/?periode_mois=3
+
+// Utilisation recommandée :
+- Afficher overview.solde_total en grand
+- Graphique simple avec projections.tendance_mois
+- Indicateur de santé : overview.sante_financiere
+- Alertes rapides basées sur alertes.niveau_urgence
+```
+
+##### **📈 Page d'analyse détaillée :**
+```javascript
+// Pour graphiques et analyses poussées
+POST /api/v1/budget-projections/calculate/
+{
+  "compte_reference": compte_id,
+  "periode_mois": 12,
+  "inclure_prelevements": true,
+  "inclure_revenus": true
+}
+
+// Utilisation recommandée :
+- Graphique détaillé avec projections_mensuelles[].solde_fin
+- Table des transactions mensuelles
+- Analyse des pics/creux avec resume.solde_minimum/maximum
+```
+
+##### **⚡ Résumés rapides (cartes, widgets) :**
+```javascript
+// Pour affichages compacts
+POST /api/v1/budget-projections/quick_projection/
+{
+  "compte_id": compte_id,
+  "periode_mois": 6
+}
+
+// Utilisation recommandée :
+- Widget "Dans 6 mois : +X€"
+- Indicateur progression avec projection.variation_totale
+- Badge d'alerte si alertes.deficit_prevu
+```
+
+##### **🔍 Analyse comparative et diagnostics :**
+```javascript
+// Pour comprendre l'impact des revenus/charges
+GET /api/v1/budget-projections/compare_scenarios/?compte_id=X&periode_mois=12
+
+// Utilisation recommandée :
+- Graphique comparatif des 3 scénarios
+- Analyse "Que se passerait-il si..." 
+- Conseils automatiques basés sur les ratios
+```
+
+#### **🎨 Recommandations d'interface :**
+
+##### **Codes couleur suggérés :**
+```css
+/* Santé financière */
+.excellente { color: #22c55e; } /* Vert foncé */
+.bonne { color: #84cc16; }      /* Vert clair */
+.fragile { color: #f59e0b; }    /* Orange */
+.critique { color: #ef4444; }   /* Rouge */
+
+/* Variations */
+.variation-positive { color: #16a34a; }
+.variation-negative { color: #dc2626; }
+.variation-neutre { color: #6b7280; }
+```
+
+##### **Seuils d'alertes recommandés :**
+```javascript
+// Logique d'affichage des alertes
+function getAlertLevel(projection) {
+  if (projection.mois_solde_negatif > 0) return 'critique';
+  if (projection.solde_minimum < 500) return 'attention'; 
+  if (projection.variation_totale < 0) return 'vigilance';
+  return 'normal';
+}
+```
+
+#### **📱 Recommandations d'UX mobile :**
+
+##### **Affichage adaptatif :**
+- **Mobile** : Privilégier `quick_projection` pour la rapidité
+- **Tablette** : Dashboard complet avec graphiques simplifiés  
+- **Desktop** : Analyse détaillée avec `calculate` et comparaisons
+
+##### **Mise en cache intelligente :**
+```javascript
+// Cache recommandé
+const cacheStrategy = {
+  dashboard: '5 minutes',      // Données temps réel
+  quick_projection: '15 minutes', // Résumés fréquents
+  calculate: '30 minutes',     // Analyses détaillées
+  compare_scenarios: '1 heure' // Comparaisons statiques
+};
+```
+
+#### **🔧 Exemples d'intégration complète :**
+
+##### **Widget résumé compte :**
+```javascript
+async function loadAccountSummary(accountId) {
+  const response = await fetch(`/api/v1/budget-projections/quick_projection/`, {
+    method: 'POST',
+    body: JSON.stringify({ compte_id: accountId, periode_mois: 3 })
+  });
+  
+  const data = await response.json();
+  
+  return {
+    currentBalance: data.compte.solde_actuel,
+    projectedBalance: data.projection.solde_final,
+    monthlyGrowth: data.projection.variation_totale / data.projection.periode_mois,
+    isImproving: data.alertes.amelioration,
+    hasDeficit: data.alertes.deficit_prevu
+  };
+}
+```
+
+##### **Graphique d'évolution :**
+```javascript
+async function loadEvolutionChart(accountId, months = 6) {
+  const response = await fetch(`/api/v1/budget-projections/calculate/`, {
+    method: 'POST',
+    body: JSON.stringify({
+      compte_reference: accountId,
+      periode_mois: months
+    })
+  });
+  
+  const data = await response.json();
+  
+  return {
+    labels: data.projections_mensuelles.map(m => m.date_debut.substring(5, 7)), // "01", "02"...
+    datasets: [{
+      label: 'Solde projeté',
+      data: data.projections_mensuelles.map(m => m.solde_fin),
+      borderColor: '#3b82f6',
+      backgroundColor: '#dbeafe'
+    }]
+  };
+}
+```
+
+#### **Indicateurs visuels suggérés :**
+
+##### **Santé financière :**
+- `excellente` : Vert foncé 🟢
+- `bonne` : Vert clair 🟢
+- `fragile` : Orange 🟠
+- `critique` : Rouge 🔴
+
+##### **Status des comptes :**
+- `excellent` : Solde > 1000€
+- `bon` : Solde > 0€
+- `attention` : Solde > -500€
+- `critique` : Solde ≤ -500€
+
+##### **Niveau d'urgence :**
+- `normal` : Pas d'action requise
+- `attention` : Surveillance recommandée
+- `critique` : Action immédiate requise 

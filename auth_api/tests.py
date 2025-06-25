@@ -35,15 +35,15 @@ class AuthSerializerTestCase(TestCase):
         self.assertTrue(serializer.is_valid())
         self.assertEqual(serializer.validated_data['user'], self.user)
     
-    def test_serializer_invalid_email_format(self):
-        """Test avec un format d'email invalide"""
+    def test_serializer_nonexistent_username(self):
+        """Test avec un nom d'utilisateur qui n'existe pas"""
         data = {
-            'username': 'invalid-email',
+            'username': 'utilisateur_inexistant',
             'password': 'testpassword123'
         }
         serializer = AuthSerializer(data=data)
         self.assertFalse(serializer.is_valid())
-        self.assertIn('Adresse mail invalide', str(serializer.errors))
+        self.assertIn('Identifiants invalides', str(serializer.errors))
     
     def test_serializer_missing_username(self):
         """Test avec nom d'utilisateur manquant"""
@@ -63,8 +63,18 @@ class AuthSerializerTestCase(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn('password', serializer.errors)
     
+    def test_serializer_invalid_username(self):
+        """Test avec un nom d'utilisateur inexistant"""
+        data = {
+            'username': 'utilisateur_inexistant',
+            'password': 'testpassword123'
+        }
+        serializer = AuthSerializer(data=data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('Identifiants invalides', str(serializer.errors))
+    
     def test_serializer_invalid_credentials(self):
-        """Test avec des identifiants incorrects"""
+        """Test avec des identifiants incorrects (mauvais mot de passe)"""
         data = {
             'username': 'testuser@example.com',
             'password': 'wrongpassword'
