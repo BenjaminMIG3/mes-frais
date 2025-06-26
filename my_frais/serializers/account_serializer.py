@@ -17,9 +17,18 @@ class AccountSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_by', 'created_by_username', 'created_at', 'updated_at']
     
     def validate_solde(self, value):
-        """Validation du solde - doit être positif"""
-        if value < 0:
-            raise serializers.ValidationError("Le solde ne peut pas être négatif.")
+        """Validation du solde - permet les valeurs négatives (découverts)"""
+        # Validation basique : vérifier que c'est un nombre valide
+        # Les soldes négatifs sont autorisés (découverts, comptes en déficit)
+        if value is None:
+            value = 0
+        
+        # Limite raisonnable pour éviter les erreurs de saisie extrêmes
+        if value < -1000000:  # Limite à -1 million
+            raise serializers.ValidationError("Le solde ne peut pas être inférieur à -1 000 000€.")
+        if value > 1000000000:  # Limite à 1 milliard
+            raise serializers.ValidationError("Le solde ne peut pas être supérieur à 1 000 000 000€.")
+            
         return value
     
     def validate_user(self, value):

@@ -40,6 +40,27 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         """Créer une projection avec l'utilisateur connecté comme créateur"""
         serializer.save(created_by=self.request.user)
     
+    def _calculate_sante_financiere(self, solde_total, prelevements_mensuels):
+        """Calculer la santé financière de manière sécurisée"""
+        if prelevements_mensuels == 0:
+            # Si pas de prélèvements, la santé dépend uniquement du solde
+            if solde_total > 1000:
+                return 'excellente'
+            elif solde_total > 0:
+                return 'bonne'
+            else:
+                return 'critique'
+        
+        # Calcul normal avec prélèvements
+        if solde_total > prelevements_mensuels * 3:
+            return 'excellente'
+        elif solde_total > prelevements_mensuels:
+            return 'bonne'
+        elif solde_total > 0:
+            return 'fragile'
+        else:
+            return 'critique'
+    
     @action(detail=False, methods=['post'])
     def calculate(self, request):
         """Calculer les projections de budget en temps réel sans les sauvegarder"""
@@ -240,6 +261,9 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         comptes_alerte = []
         alertes_urgentes = []
         
+        # Seuil d'alerte basé sur les prélèvements (gestion des cas où prélèvements = 0)
+        seuil_attention = prelevements_mensuels / Decimal('2') if prelevements_mensuels > 0 else Decimal('100.00')
+        
         for compte in comptes:
             if compte.solde < 0:
                 comptes_alerte.append({
@@ -249,7 +273,7 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                     'niveau': 'critique'
                 })
                 alertes_urgentes.append(f"Compte '{compte.nom}' en déficit: {compte.solde}€")
-            elif compte.solde < prelevements_mensuels / 2:  # Moins de la moitié des prélèvements mensuels
+            elif prelevements_mensuels > 0 and compte.solde < seuil_attention:  # Moins de la moitié des prélèvements mensuels
                 comptes_alerte.append({
                     'id': compte.id,
                     'nom': compte.nom,
@@ -281,9 +305,7 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 'prelevements_mensuels': float(prelevements_mensuels),
                 'solde_mensuel_estime': float(solde_mensuel_estime),
                 'status': 'positif' if solde_mensuel_estime > 0 else 'negatif',
-                'sante_financiere': 'excellente' if solde_total > prelevements_mensuels * 3 else 
-                                   'bonne' if solde_total > prelevements_mensuels else
-                                   'fragile' if solde_total > 0 else 'critique'
+                'sante_financiere': self._calculate_sante_financiere(solde_total, prelevements_mensuels)
             },
             'activite_recente': activite_stats,
             'comptes': comptes_details,
@@ -311,11 +333,11 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
                 'periode_mois': periode_projection,
                 'tendance_mois': projection_mois,
                 'capacite_epargne_mensuelle': float(max(0, solde_mensuel_estime)),
-                'mois_avant_deficit': int(solde_total / abs(solde_mensuel_estime)) if solde_mensuel_estime < 0 else None
+                'mois_avant_deficit': int(solde_total / abs(solde_mensuel_estime)) if solde_mensuel_estime < 0 and solde_mensuel_estime != 0 else None
             },
             'metriques': {
-                'ratio_revenus_prelevements': float(revenus_mensuels / prelevements_mensuels) if prelevements_mensuels > 0 else float('inf'),
-                'couverture_solde_mois': float(solde_total / prelevements_mensuels) if prelevements_mensuels > 0 else float('inf'),
+                'ratio_revenus_prelevements': float(revenus_mensuels / prelevements_mensuels) if prelevements_mensuels > 0 else None,
+                'couverture_solde_mois': float(solde_total / prelevements_mensuels) if prelevements_mensuels > 0 else None,
                 'total_operations_mois': operations_mois.count(),
                 'moyenne_operation': float(operations_mois.aggregate(avg=Avg('montant'))['avg'] or 0) if operations_mois.count() > 0 else 0
             }

@@ -391,11 +391,29 @@ class AccountSerializerTestCase(TestCase):
         self.assertEqual(account.created_by, self.user)
     
     def test_account_serializer_negative_balance(self):
-        """Test avec un solde négatif (doit échouer)"""
+        """Test avec un solde négatif (maintenant autorisé pour les découverts)"""
         data = {
             'user': self.user.id,
             'nom': 'Compte Test',
             'solde': '-100.00'
+        }
+        
+        request_mock = MagicMock()
+        request_mock.user = self.user
+        
+        serializer = AccountSerializer(data=data, context={'request': request_mock})
+        self.assertTrue(serializer.is_valid())  # Maintenant autorisé
+        
+        account = serializer.save()
+        self.assertEqual(account.solde, Decimal('-100.00'))
+        self.assertEqual(account.nom, 'Compte Test')
+    
+    def test_account_serializer_extreme_negative_balance(self):
+        """Test avec un solde négatif extrême (doit échouer)"""
+        data = {
+            'user': self.user.id,
+            'nom': 'Compte Test',
+            'solde': '-2000000.00'  # Au-delà de la limite
         }
         
         request_mock = MagicMock()
@@ -494,12 +512,25 @@ class AccountViewSetTestCase(APITestCase):
         new_account = Account.objects.get(id=response.data['id'])
         self.assertEqual(new_account.created_by, self.user)
     
+    def test_create_account_with_negative_balance(self):
+        """Test de création d'un compte avec solde négatif (maintenant autorisé)"""
+        data = {
+            'user': self.user.id,
+            'nom': 'Compte Découvert',
+            'solde': '-100.00'  # Solde négatif maintenant autorisé
+        }
+        response = self.client.post(self.accounts_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['nom'], 'Compte Découvert')
+        self.assertEqual(float(response.data['solde']), -100.00)
+    
     def test_create_account_invalid_data(self):
         """Test de création d'un compte avec données invalides"""
         data = {
             'user': self.user.id,
             'nom': 'Compte Test',
-            'solde': '-100.00'  # Solde négatif
+            'solde': '-2000000.00'  # Solde négatif extrême
         }
         response = self.client.post(self.accounts_url, data, format='json')
         
@@ -796,11 +827,12 @@ class MyFraisIntegrationTestCase(APITestCase):
         self.assertEqual(summary_response.data['total_comptes'], 1)
 
 
-class BudgetProjectionAPITestCase(TestCase):
+class BudgetProjectionAPITestCase(APITestCase):
     """Tests pour l'API des projections budgétaires"""
     
     def setUp(self):
         """Configuration initiale pour chaque test"""
+        self.client = APIClient()
         self.user = User.objects.create_user(
             username='testuser@example.com',
             email='testuser@example.com',
@@ -812,7 +844,10 @@ class BudgetProjectionAPITestCase(TestCase):
             solde=Decimal('1000.00'),
             created_by=self.user
         )
-        self.client.force_authenticate(user=self.user)
+        
+        # Authentification
+        access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
     
     def test_dashboard_with_different_periods(self):
         """Test du dashboard avec différentes périodes de projection"""
