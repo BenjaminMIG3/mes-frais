@@ -20,8 +20,10 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             position: relative;
+            padding: 1rem 0;
         }
 
         .floating-money {
@@ -48,20 +50,22 @@
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
             border-radius: 20px;
-            padding: 3rem;
+            padding: 2rem;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
             max-width: 600px;
             width: 90%;
             position: relative;
             z-index: 10;
+            max-height: 95vh;
+            overflow-y: auto;
         }
 
         .error-code {
-            font-size: 8rem;
+            font-size: 6rem;
             font-weight: 700;
             color: #e74c3c;
             text-shadow: 0 10px 30px rgba(231, 76, 60, 0.3);
-            margin-bottom: 1rem;
+            margin-bottom: 0.5rem;
             animation: bounce 2s infinite;
         }
 
@@ -72,9 +76,9 @@
         }
 
         .bank-icon {
-            font-size: 5rem;
+            font-size: 3rem;
             color: #3498db;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
             animation: shake 3s infinite;
         }
 
@@ -85,31 +89,36 @@
         }
 
         .title {
-            font-size: 2.5rem;
+            font-size: 2rem;
             font-weight: 600;
             color: #2c3e50;
-            margin-bottom: 1rem;
+            margin-bottom: 0.5rem;
         }
 
         .subtitle {
-            font-size: 1.2rem;
+            font-size: 1rem;
             color: #7f8c8d;
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
             line-height: 1.6;
         }
 
         .gif-container {
-            margin: 2rem 0;
+            margin: 1rem auto;
             border-radius: 15px;
             overflow: hidden;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            max-width: 300px;
         }
 
         .gif-container img {
             width: 100%;
-            max-width: 400px;
+            max-width: 300px;
             height: auto;
             display: block;
+            margin: 0 auto;
         }
 
         .buttons {
@@ -117,7 +126,7 @@
             gap: 1rem;
             justify-content: center;
             flex-wrap: wrap;
-            margin-top: 2rem;
+            margin-top: 1rem;
         }
 
         .btn {
@@ -159,32 +168,32 @@
         .fun-facts {
             background: rgba(52, 152, 219, 0.1);
             border-radius: 15px;
-            padding: 1.5rem;
-            margin: 2rem 0;
+            padding: 1rem;
+            margin: 1rem 0;
             border-left: 5px solid #3498db;
         }
 
         .fun-facts h3 {
             color: #2c3e50;
-            margin-bottom: 1rem;
-            font-size: 1.3rem;
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
         }
 
         .fun-facts p {
             color: #7f8c8d;
-            font-size: 1rem;
+            font-size: 0.9rem;
             line-height: 1.6;
         }
 
         .loading-account {
             display: inline-block;
-            width: 60px;
-            height: 60px;
-            border: 6px solid #ecf0f1;
-            border-top: 6px solid #3498db;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #ecf0f1;
+            border-top: 4px solid #3498db;
             border-radius: 50%;
             animation: spin 1s linear infinite;
-            margin: 1rem 0;
+            margin: 0.5rem 0;
         }
 
         @keyframes spin {
@@ -193,10 +202,10 @@
         }
 
         .account-balance {
-            font-size: 1.5rem;
+            font-size: 1.2rem;
             color: #27ae60;
             font-weight: 600;
-            margin: 1rem 0;
+            margin: 0.5rem 0;
             animation: pulse 2s infinite;
         }
 
