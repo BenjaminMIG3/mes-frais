@@ -109,6 +109,245 @@ Recherche avancée | GET | **operations/search/**
 Regroupement par compte | GET | **operations/by_account/**
 Création en lot | POST | **operations/bulk_create/**
 
+#### 3.3.1 Structure détaillée des réponses - Opérations
+
+##### **GET /api/v1/operations/** - Liste des opérations
+
+**Format de réponse standard (OperationListSerializer) :**
+```json
+[
+  {
+    "id": 1,
+    "compte_reference_username": "john_doe",
+    "montant": "250.00",
+    "description": "Salaire mensuel",
+    "created_at": "2024-01-15T10:30:00.123Z"
+  },
+  {
+    "id": 2,
+    "compte_reference_username": "jane_smith",
+    "montant": "-45.50",
+    "description": "Achat supermarché",
+    "created_at": "2024-01-14T16:22:15.456Z"
+  }
+]
+```
+
+**Détails des champs :**
+
+| Champ | Type | Description |
+|-------|------|-------------|
+| `id` | Integer | Identifiant unique de l'opération |
+| `compte_reference_username` | String | Nom d'utilisateur du propriétaire du compte |
+| `montant` | String (Decimal) | Montant de l'opération (positif = crédit, négatif = débit) |
+| `description` | String | Description de l'opération (max 255 caractères) |
+| `created_at` | String (ISO DateTime) | Date et heure de création de l'opération |
+
+**Paramètres de requête disponibles :**
+```json
+{
+  "compte_reference": "integer (optionnel) - Filtrer par ID de compte",
+  "created_by": "integer (optionnel) - Filtrer par ID d'utilisateur créateur",
+  "search": "string (optionnel) - Recherche dans la description",
+  "ordering": "string (optionnel) - Tri (montant, created_at, updated_at, -created_at)",
+  "page": "integer (optionnel) - Numéro de page pour la pagination",
+  "page_size": "integer (optionnel) - Nombre d'éléments par page"
+}
+```
+
+##### **GET /api/v1/operations/{id}/** - Détail d'une opération
+
+**Format de réponse (OperationSerializer complet) :**
+```json
+{
+  "id": 1,
+  "compte_reference": 3,
+  "compte_reference_username": "john_doe",
+  "montant": "250.00",
+  "description": "Salaire mensuel",
+  "created_by": 1,
+  "created_by_username": "admin",
+  "created_at": "2024-01-15T10:30:00.123Z",
+  "updated_at": "2024-01-15T10:30:00.123Z"
+}
+```
+
+##### **GET /api/v1/operations/statistics/** - Statistiques globales
+
+```json
+{
+  "statistics": {
+    "total_operations": 150,
+    "total_montant": 2500.75,
+    "operations_30_jours": 45,
+    "montant_30_jours": 1200.50,
+    "operations_7_jours": 12,
+    "montant_7_jours": 350.25,
+    "operations_positives": 80,
+    "montant_positif": 3200.00,
+    "operations_negatives": 70,
+    "montant_negatif": -700.25
+  }
+}
+```
+
+##### **GET /api/v1/operations/by_account/** - Opérations groupées par compte
+
+```json
+[
+  {
+    "account_id": 1,
+    "account_username": "john_doe",
+    "operations_count": 25,
+    "total_montant": 1500.75,
+    "operations": [
+      {
+        "id": 1,
+        "montant": 250.00,
+        "description": "Salaire",
+        "created_at": "2024-01-15T10:30:00.123Z"
+      },
+      {
+        "id": 2,
+        "montant": -50.25,
+        "description": "Achat",
+        "created_at": "2024-01-14T15:20:00.456Z"
+      }
+    ]
+  }
+]
+```
+
+##### **GET /api/v1/operations/search/** - Recherche avancée
+
+**Paramètres de recherche :**
+```json
+{
+  "q": "string (optionnel) - Terme de recherche",
+  "min_montant": "decimal (optionnel) - Montant minimum",
+  "max_montant": "decimal (optionnel) - Montant maximum",
+  "date_debut": "date (optionnel) - YYYY-MM-DD",
+  "date_fin": "date (optionnel) - YYYY-MM-DD"
+}
+```
+
+**Format de réponse :**
+```json
+{
+  "query": "salaire",
+  "filters": {
+    "min_montant": "100.00",
+    "max_montant": "500.00",
+    "date_debut": "2024-01-01",
+    "date_fin": "2024-01-31"
+  },
+  "results_count": 15,
+  "operations": [
+    {
+      "id": 1,
+      "compte_reference_username": "john_doe",
+      "montant": "250.00",
+      "description": "Salaire mensuel",
+      "created_at": "2024-01-15T10:30:00.123Z"
+    }
+  ]
+}
+```
+
+##### **POST /api/v1/operations/bulk_create/** - Création en lot
+
+**Corps de la requête :**
+```json
+{
+  "operations": [
+    {
+      "compte_reference": 1,
+      "montant": "250.00",
+      "description": "Salaire"
+    },
+    {
+      "compte_reference": 1,
+      "montant": "-45.50",
+      "description": "Achat supermarché"
+    }
+  ]
+}
+```
+
+**Format de réponse :**
+```json
+{
+  "created_count": 2,
+  "error_count": 0,
+  "created_operations": [
+    {
+      "id": 10,
+      "compte_reference_username": "john_doe",
+      "montant": "250.00",
+      "description": "Salaire",
+      "created_at": "2024-01-15T10:30:00.123Z"
+    },
+    {
+      "id": 11,
+      "compte_reference_username": "john_doe",
+      "montant": "-45.50",
+      "description": "Achat supermarché",
+      "created_at": "2024-01-15T10:30:05.678Z"
+    }
+  ],
+  "errors": []
+}
+```
+
+**En cas d'erreurs partielles :**
+```json
+{
+  "created_count": 1,
+  "error_count": 1,
+  "created_operations": [
+    {
+      "id": 10,
+      "compte_reference_username": "john_doe",
+      "montant": "250.00",
+      "description": "Salaire",
+      "created_at": "2024-01-15T10:30:00.123Z"
+    }
+  ],
+  "errors": [
+    {
+      "index": 1,
+      "data": {
+        "compte_reference": 999,
+        "montant": "0.00",
+        "description": ""
+      },
+      "errors": {
+        "compte_reference": ["Le compte de référence spécifié n'existe pas."],
+        "montant": ["Le montant ne peut pas être zéro."],
+        "description": ["La description ne peut pas être vide."]
+      }
+    }
+  ]
+}
+```
+
+#### 3.3.2 Règles de validation - Opérations
+
+**Règles métier importantes :**
+
+1. **Montant** : Ne peut pas être égal à zéro (validation stricte)
+2. **Description** : Ne peut pas être vide, maximum 255 caractères
+3. **Compte de référence** : Doit exister et appartenir à l'utilisateur connecté
+4. **Ajustement automatique du solde** : Le solde du compte est automatiquement mis à jour lors des opérations CRUD
+5. **Filtrage par utilisateur** : Les utilisateurs ne voient que leurs propres opérations (sauf staff)
+
+**Codes d'erreur courants :**
+- `400` : Données de validation invalides
+- `401` : Token d'authentification manquant ou invalide
+- `403` : Accès refusé (tentative d'accès aux données d'un autre utilisateur)
+- `404` : Opération ou compte non trouvé
+- `500` : Erreur serveur interne
+
 ### 3.4 Prélèvements automatiques (`direct-debits`)
 Opération | Méthode | Chemin
 --- | --- | ---
