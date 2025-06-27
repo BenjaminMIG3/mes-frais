@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-!^1+rn!%*(zz=%2$+*)!=6__bd$t7hk2x(g)c%h1_4m_i^6s-#
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['chatforall.online', 'www.chatforall.online', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['chatforall.online', 'www.chatforall.online', 'localhost', '127.0.0.1', '192.168.1.179']
 
 # Application definition
 
