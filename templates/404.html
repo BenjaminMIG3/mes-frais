@@ -257,6 +257,21 @@
             0% { transform: translateY(-100vh); }
             100% { transform: translateY(100vh); }
         }
+
+        html, body {
+            overflow-y: hidden;
+            height: 100vh;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-sizing: border-box;
+        }
+        * {
+            box-sizing: border-box;
+        }
     </style>
 </head>
 <body>
