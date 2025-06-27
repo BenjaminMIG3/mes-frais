@@ -29,18 +29,19 @@
         }
 
         .floating-money {
-            position: absolute;
+            position: fixed;
             font-size: 2rem;
             color: rgba(255, 255, 255, 0.1);
             animation: float 6s ease-in-out infinite;
+            z-index: 1;
         }
 
-        .floating-money:nth-child(1) { top: 10%; left: 10%; animation-delay: 0s; }
-        .floating-money:nth-child(2) { top: 20%; right: 20%; animation-delay: 1s; }
-        .floating-money:nth-child(3) { bottom: 30%; left: 15%; animation-delay: 2s; }
-        .floating-money:nth-child(4) { bottom: 20%; right: 10%; animation-delay: 3s; }
-        .floating-money:nth-child(5) { top: 50%; left: 5%; animation-delay: 4s; }
-        .floating-money:nth-child(6) { top: 60%; right: 5%; animation-delay: 5s; }
+        .floating-money:nth-child(1) { top: 10%; left: 5%; animation-delay: 0s; }
+        .floating-money:nth-child(2) { top: 20%; right: 5%; animation-delay: 1s; }
+        .floating-money:nth-child(3) { bottom: 30%; left: 8%; animation-delay: 2s; }
+        .floating-money:nth-child(4) { bottom: 20%; right: 8%; animation-delay: 3s; }
+        .floating-money:nth-child(5) { top: 50%; left: 2%; animation-delay: 4s; }
+        .floating-money:nth-child(6) { top: 60%; right: 2%; animation-delay: 5s; }
 
         @keyframes float {
             0%, 100% { transform: translateY(0px) rotate(0deg); }
@@ -246,11 +247,12 @@
         }
 
         .money-rain {
-            position: absolute;
+            position: fixed;
             top: -10px;
             animation: fall 3s linear infinite;
             font-size: 1.5rem;
             color: #f39c12;
+            z-index: 1;
         }
 
         @keyframes fall {
@@ -335,7 +337,7 @@
                 const money = document.createElement('div');
                 money.className = 'money-rain';
                 money.innerHTML = moneySymbols[Math.floor(Math.random() * moneySymbols.length)];
-                money.style.left = Math.random() * 100 + '%';
+                money.style.left = Math.random() * 100 + 'vw';
                 money.style.animationDuration = (Math.random() * 3 + 2) + 's';
                 container.appendChild(money);
                 
