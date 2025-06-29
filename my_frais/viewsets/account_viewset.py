@@ -49,13 +49,7 @@ class AccountViewSet(viewsets.ModelViewSet):
         serializer.save()
     
     def perform_destroy(self, instance):
-        """Supprimer un compte avec vérification"""
-        # Vérifier qu'il n'y a pas d'opérations liées
-        if instance.operations.exists():
-            raise serializers.ValidationError(
-                "Impossible de supprimer un compte avec des opérations. "
-                "Supprimez d'abord toutes les opérations."
-            )
+        """Supprimer un compte (les entités liées seront supprimées automatiquement via CASCADE)"""
         instance.delete()
     
     @action(detail=True, methods=['get'])
