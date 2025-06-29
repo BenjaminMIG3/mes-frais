@@ -154,3 +154,5 @@ JWT_SETTINGS = {
     'ALGORITHM': 'HS256',
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+CORS_ALLOW_ALL_ORIGINS = True  # ⚠️ Seulement en développement !
