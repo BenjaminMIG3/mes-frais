@@ -154,10 +154,3 @@ JWT_SETTINGS = {
     'ALGORITHM': 'HS256',
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
-
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",  # Vite dev server
-    "http://127.0.0.1:5173",
-    "https://mes-frais.chatforall.online",  # Votre domaine de prod
-]
-CORS_ALLOW_ALL_ORIGINS = True  # ⚠️ Seulement en développement !
