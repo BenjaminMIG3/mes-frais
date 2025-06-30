@@ -27,8 +27,8 @@ class DirectDebitSerializer(serializers.ModelSerializer):
     
     def validate_montant(self, value):
         """Validation du montant - doit être positif pour les prélèvements"""
-        if value <= Decimal('0.00'):
-            raise serializers.ValidationError("Le montant du prélèvement doit être positif.")
+        # if value <= Decimal('0.00'):
+        #     raise serializers.ValidationError("Le montant du prélèvement doit être positif.")
         return value
     
     def validate_compte_reference(self, value):

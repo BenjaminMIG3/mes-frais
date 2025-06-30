@@ -44,7 +44,28 @@ class RecurringIncomeViewSet(viewsets.ModelViewSet):
             return RecurringIncomeSummarySerializer
         return RecurringIncomeSerializer
     
-    def perform_create(self, serializer):
+    def create(self, request, *args, **kwargs):
+        """Créer un revenu récurrent avec debug des erreurs 400"""
+        print(f"🔵 POST /recurring-incomes/ - Données reçues:")
+        print(f"📋 Body: {request.data}")
+        print(f"👤 User: {request.user}")
+        print(f"🔑 Auth: {request.auth}")
+        
+        serializer = self.get_serializer(data=request.data)
+        
+        if not serializer.is_valid():
+            print(f"❌ ERREUR 400 - Validation échouée:")
+            print(f"📝 Erreurs: {serializer.errors}")
+            print(f"📊 Données reçues: {request.data}")
+            print(f"🎯 Champs requis: {self.get_serializer().Meta.model._meta.get_fields()}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        print(f"✅ SUCCÈS - RecurringIncome créé: ID {serializer.data.get('id')}")
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    def perform_create(self, serializer: RecurringIncomeSerializer):
         """Créer un revenu récurrent avec l'utilisateur connecté comme créateur"""
         serializer.save(created_by=self.request.user)
     
@@ -279,4 +300,47 @@ class RecurringIncomeViewSet(viewsets.ModelViewSet):
             'created_revenus': created_revenus,
             'errors_count': len(errors),
             'errors': errors
-        }, status=status.HTTP_201_CREATED if created_revenus else status.HTTP_400_BAD_REQUEST) 
+        }, status=status.HTTP_201_CREATED if created_revenus else status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['post'])
+    def process_due_incomes(self, request):
+        """Traiter manuellement tous les revenus à échéance"""
+        try:
+            processed_count = RecurringIncome.process_all_due_incomes()
+            
+            return Response({
+                'message': f'{processed_count} revenus traités avec succès',
+                'processed_count': processed_count,
+                'date_traitement': date.today().isoformat()
+            })
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Erreur lors du traitement des revenus: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['post'])
+    def process_single_income(self, request, pk=None):
+        """Traiter manuellement un revenu spécifique"""
+        revenu = self.get_object()
+        
+        try:
+            if revenu.process_due_income():
+                return Response({
+                    'message': 'Revenu traité avec succès',
+                    'revenu_id': revenu.id,
+                    'date_traitement': date.today().isoformat()
+                })
+            else:
+                return Response({
+                    'message': 'Aucun revenu à traiter pour cette échéance',
+                    'revenu_id': revenu.id,
+                    'date_prochain_versement': revenu.date_premier_versement.isoformat()
+                })
+                
+        except Exception as e:
+            return Response(
+                {'error': f'Erreur lors du traitement du revenu: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            ) 

@@ -3,6 +3,8 @@ from django.db import models
 from django.contrib.auth.models import User
 from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 class BaseModel(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='%(class)s_created')
@@ -85,6 +87,64 @@ class DirectDebit(Operation):
         
         return occurrences
 
+    def process_due_payments(self):
+        """Traite les prélèvements à échéance et crée les opérations correspondantes"""
+        today = date.today()
+        
+        # Vérifier si le prélèvement est actif et à échéance
+        if not self.actif:
+            return False
+            
+        if self.echeance and today > self.echeance:
+            return False
+        
+        # Calculer la prochaine date de prélèvement
+        next_payment_date = self.get_next_occurrence()
+        
+        # Si la date de prélèvement est aujourd'hui ou dans le passé
+        if self.date_prelevement <= today:
+            # Créer l'opération de prélèvement
+            operation = Operation.objects.create(
+                compte_reference=self.compte_reference,
+                montant=-abs(self.montant),  # Négatif pour les prélèvements
+                description=f"Prélèvement automatique - {self.description}",
+                date_operation=today,
+                created_by=self.created_by
+            )
+            
+            # Mettre à jour le solde du compte
+            self.compte_reference.solde += operation.montant
+            self.compte_reference.save()
+            
+            # Mettre à jour la date de prélèvement pour la prochaine occurrence
+            if next_payment_date:
+                self.date_prelevement = next_payment_date
+                self.save(update_fields=['date_prelevement'])
+            
+            return True
+        
+        return False
+
+    @classmethod
+    def process_all_due_payments(cls):
+        """Traite tous les prélèvements à échéance pour tous les comptes"""
+        today = date.today()
+        processed_count = 0
+        
+        # Récupérer tous les prélèvements actifs à échéance
+        due_payments = cls.objects.filter(
+            actif=True,
+            date_prelevement__lte=today
+        ).exclude(
+            echeance__lt=today
+        )
+        
+        for payment in due_payments:
+            if payment.process_due_payments():
+                processed_count += 1
+        
+        return processed_count
+
 class RecurringIncome(BaseModel):
     """Modèle pour les revenus récurrents (salaires, subventions, aides, etc.)"""
     compte_reference = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='recurring_incomes')
@@ -156,6 +216,64 @@ class RecurringIncome(BaseModel):
         
         return occurrences
 
+    def process_due_income(self):
+        """Traite les revenus à échéance et crée les opérations correspondantes"""
+        today = date.today()
+        
+        # Vérifier si le revenu est actif et à échéance
+        if not self.actif:
+            return False
+            
+        if self.date_fin and today > self.date_fin:
+            return False
+        
+        # Calculer la prochaine date de versement
+        next_income_date = self.get_next_occurrence()
+        
+        # Si la date de versement est aujourd'hui ou dans le passé
+        if self.date_premier_versement <= today:
+            # Créer l'opération de revenu
+            operation = Operation.objects.create(
+                compte_reference=self.compte_reference,
+                montant=abs(self.montant),  # Positif pour les revenus
+                description=f"Revenu automatique - {self.type_revenu} - {self.description}",
+                date_operation=today,
+                created_by=self.created_by
+            )
+            
+            # Mettre à jour le solde du compte
+            self.compte_reference.solde += operation.montant
+            self.compte_reference.save()
+            
+            # Mettre à jour la date de versement pour la prochaine occurrence
+            if next_income_date:
+                self.date_premier_versement = next_income_date
+                self.save(update_fields=['date_premier_versement'])
+            
+            return True
+        
+        return False
+
+    @classmethod
+    def process_all_due_incomes(cls):
+        """Traite tous les revenus à échéance pour tous les comptes"""
+        today = date.today()
+        processed_count = 0
+        
+        # Récupérer tous les revenus actifs à échéance
+        due_incomes = cls.objects.filter(
+            actif=True,
+            date_premier_versement__lte=today
+        ).exclude(
+            date_fin__lt=today
+        )
+        
+        for income in due_incomes:
+            if income.process_due_income():
+                processed_count += 1
+        
+        return processed_count
+
 class BudgetProjection(BaseModel):
     """Modèle pour stocker les projections de budget calculées"""
     compte_reference = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='budget_projections')
@@ -169,4 +287,44 @@ class BudgetProjection(BaseModel):
     
     def __str__(self):
         return f"Projection {self.compte_reference.nom} - {self.date_projection} ({self.periode_projection} mois)"
+
+# Signaux pour le traitement automatique des prélèvements
+@receiver(post_save, sender=DirectDebit)
+def trigger_payment_processing(sender, instance, created, **kwargs):
+    """
+    Signal qui déclenche le traitement automatique des prélèvements
+    lors de la création ou modification d'un DirectDebit
+    """
+    if created:
+        # Pour un nouveau prélèvement, vérifier s'il doit être traité immédiatement
+        if instance.date_prelevement <= date.today():
+            instance.process_due_payments()
+    else:
+        # Pour une modification, vérifier si la date de prélèvement a changé
+        if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
+            old_date = instance._state.fields_cache.get('date_prelevement')
+            if old_date and old_date != instance.date_prelevement:
+                # La date a changé, vérifier si le nouveau prélèvement doit être traité
+                if instance.date_prelevement <= date.today():
+                    instance.process_due_payments()
+
+# Signaux pour le traitement automatique des revenus récurrents
+@receiver(post_save, sender=RecurringIncome)
+def trigger_income_processing(sender, instance, created, **kwargs):
+    """
+    Signal qui déclenche le traitement automatique des revenus récurrents
+    lors de la création ou modification d'un RecurringIncome
+    """
+    if created:
+        # Pour un nouveau revenu, vérifier s'il doit être traité immédiatement
+        if instance.date_premier_versement <= date.today():
+            instance.process_due_income()
+    else:
+        # Pour une modification, vérifier si la date de versement a changé
+        if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
+            old_date = instance._state.fields_cache.get('date_premier_versement')
+            if old_date and old_date != instance.date_premier_versement:
+                # La date a changé, vérifier si le nouveau revenu doit être traité
+                if instance.date_premier_versement <= date.today():
+                    instance.process_due_income()
     

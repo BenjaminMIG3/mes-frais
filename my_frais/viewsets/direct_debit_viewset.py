@@ -46,6 +46,27 @@ class DirectDebitViewSet(viewsets.ModelViewSet):
             return DirectDebitSummarySerializer
         return DirectDebitSerializer
     
+    def create(self, request, *args, **kwargs):
+        """Créer un prélèvement automatique avec debug des erreurs 400"""
+        print(f"🔵 POST /direct-debits/ - Données reçues:")
+        print(f"📋 Body: {request.data}")
+        print(f"👤 User: {request.user}")
+        print(f"🔑 Auth: {request.auth}")
+        
+        serializer = self.get_serializer(data=request.data)
+        
+        if not serializer.is_valid():
+            print(f"❌ ERREUR 400 - Validation échouée:")
+            print(f"📝 Erreurs: {serializer.errors}")
+            print(f"📊 Données reçues: {request.data}")
+            print(f"🎯 Champs requis: {self.get_serializer().Meta.model._meta.get_fields()}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        print(f"✅ SUCCÈS - DirectDebit créé: ID {serializer.data.get('id')}")
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
     def perform_create(self, serializer):
         """Créer un prélèvement automatique avec l'utilisateur connecté comme créateur"""
         serializer.save(created_by=self.request.user)
@@ -273,6 +294,49 @@ class DirectDebitViewSet(viewsets.ModelViewSet):
             'error_count': len(errors),
             'errors': errors
         })
+    
+    @action(detail=False, methods=['post'])
+    def process_due_payments(self, request):
+        """Traiter manuellement tous les prélèvements à échéance"""
+        try:
+            processed_count = DirectDebit.process_all_due_payments()
+            
+            return Response({
+                'message': f'{processed_count} prélèvements traités avec succès',
+                'processed_count': processed_count,
+                'date_traitement': date.today().isoformat()
+            })
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Erreur lors du traitement des prélèvements: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['post'])
+    def process_single_payment(self, request, pk=None):
+        """Traiter manuellement un prélèvement spécifique"""
+        direct_debit = self.get_object()
+        
+        try:
+            if direct_debit.process_due_payments():
+                return Response({
+                    'message': 'Prélèvement traité avec succès',
+                    'prélèvement_id': direct_debit.id,
+                    'date_traitement': date.today().isoformat()
+                })
+            else:
+                return Response({
+                    'message': 'Aucun prélèvement à traiter pour cette échéance',
+                    'prélèvement_id': direct_debit.id,
+                    'date_prochaine_échéance': direct_debit.date_prelevement.isoformat()
+                })
+                
+        except Exception as e:
+            return Response(
+                {'error': f'Erreur lors du traitement du prélèvement: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=False, methods=['get'])
     def summary(self, request):

@@ -40,6 +40,27 @@ class OperationViewSet(viewsets.ModelViewSet):
             return OperationListSerializer
         return OperationSerializer
     
+    def create(self, request, *args, **kwargs):
+        """Créer une opération avec debug des erreurs 400"""
+        print(f"🔵 POST /operations/ - Données reçues:")
+        print(f"📋 Body: {request.data}")
+        print(f"👤 User: {request.user}")
+        print(f"🔑 Auth: {request.auth}")
+        
+        serializer = self.get_serializer(data=request.data)
+        
+        if not serializer.is_valid():
+            print(f"❌ ERREUR 400 - Validation échouée:")
+            print(f"📝 Erreurs: {serializer.errors}")
+            print(f"📊 Données reçues: {request.data}")
+            print(f"🎯 Champs requis: {self.get_serializer().Meta.model._meta.get_fields()}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        print(f"✅ SUCCÈS - Operation créée: ID {serializer.data.get('id')}")
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
     def perform_create(self, serializer):
         """Créer une opération avec l'utilisateur connecté comme créateur"""
         serializer.save(created_by=self.request.user)
