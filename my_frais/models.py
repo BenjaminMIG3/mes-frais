@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+import time
 
 class BaseModel(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='%(class)s_created')
@@ -288,6 +289,75 @@ class BudgetProjection(BaseModel):
     def __str__(self):
         return f"Projection {self.compte_reference.nom} - {self.date_projection} ({self.periode_projection} mois)"
 
+class AutomatedTask(BaseModel):
+    """Modèle pour tracer les tâches automatiques exécutées"""
+    TASK_TYPES = [
+        ('PAYMENT_PROCESSING', 'Traitement des prélèvements'),
+        ('INCOME_PROCESSING', 'Traitement des revenus'),
+        ('BOTH_PROCESSING', 'Traitement complet'),
+        ('MANUAL_EXECUTION', 'Exécution manuelle'),
+        ('AUTO_TRIGGER', 'Déclenchement automatique'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('SUCCESS', 'Succès'),
+        ('ERROR', 'Erreur'),
+        ('PARTIAL', 'Partiel'),
+    ]
+    
+    task_type = models.CharField(max_length=50, choices=TASK_TYPES, verbose_name="Type de tâche")
+    execution_date = models.DateTimeField(auto_now_add=True, verbose_name="Date d'exécution")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="Statut")
+    processed_count = models.IntegerField(default=0, verbose_name="Nombre d'opérations traitées")
+    error_message = models.TextField(blank=True, null=True, verbose_name="Message d'erreur")
+    execution_duration = models.DecimalField(
+        max_digits=10, 
+        decimal_places=3, 
+        null=True, 
+        blank=True, 
+        verbose_name="Durée d'exécution (secondes)"
+    )
+    details = models.JSONField(default=dict, blank=True, verbose_name="Détails de l'exécution")
+    
+    # Permettre created_by à être null pour les tâches automatiques
+    created_by = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name='automated_tasks_created',
+        null=True,
+        blank=True,
+        verbose_name="Créé par"
+    )
+    
+    class Meta:
+        verbose_name = "Tâche automatique"
+        verbose_name_plural = "Tâches automatiques"
+        ordering = ['-execution_date']
+    
+    def __str__(self):
+        return f"{self.get_task_type_display()} - {self.execution_date.strftime('%d/%m/%Y %H:%M')} - {self.get_status_display()}"
+    
+    @classmethod
+    def log_task(cls, task_type, status, processed_count=0, error_message=None, execution_duration=None, details=None, user=None):
+        """Méthode utilitaire pour enregistrer une tâche automatique"""
+        # Si aucun utilisateur n'est fourni, essayer de récupérer un utilisateur système
+        if user is None:
+            try:
+                # Essayer de récupérer le premier utilisateur superuser ou le premier utilisateur
+                user = User.objects.filter(is_superuser=True).first() or User.objects.first()
+            except:
+                user = None
+        
+        return cls.objects.create(
+            task_type=task_type,
+            status=status,
+            processed_count=processed_count,
+            error_message=error_message,
+            execution_duration=execution_duration,
+            details=details or {},
+            created_by=user
+        )
+
 # Signaux pour le traitement automatique des prélèvements
 @receiver(post_save, sender=DirectDebit)
 def trigger_payment_processing(sender, instance, created, **kwargs):
@@ -295,18 +365,73 @@ def trigger_payment_processing(sender, instance, created, **kwargs):
     Signal qui déclenche le traitement automatique des prélèvements
     lors de la création ou modification d'un DirectDebit
     """
-    if created:
-        # Pour un nouveau prélèvement, vérifier s'il doit être traité immédiatement
-        if instance.date_prelevement <= date.today():
-            instance.process_due_payments()
-    else:
-        # Pour une modification, vérifier si la date de prélèvement a changé
-        if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
-            old_date = instance._state.fields_cache.get('date_prelevement')
-            if old_date and old_date != instance.date_prelevement:
-                # La date a changé, vérifier si le nouveau prélèvement doit être traité
-                if instance.date_prelevement <= date.today():
-                    instance.process_due_payments()
+    start_time = time.time()
+    
+    try:
+        if created:
+            # Pour un nouveau prélèvement, vérifier s'il doit être traité immédiatement
+            if instance.date_prelevement <= date.today() and instance.actif:
+                processed = instance.process_due_payments()
+                execution_duration = time.time() - start_time
+                
+                # Enregistrer la tâche automatique
+                AutomatedTask.log_task(
+                    task_type='PAYMENT_PROCESSING',
+                    status='SUCCESS' if processed else 'SUCCESS',
+                    processed_count=1 if processed else 0,
+                    execution_duration=execution_duration,
+                    details={
+                        'trigger': 'creation_prelevement',
+                        'prelevement_id': instance.id,
+                        'description': instance.description,
+                        'date_prelevement': instance.date_prelevement.isoformat(),
+                        'montant': str(instance.montant)
+                    },
+                    user=instance.created_by
+                )
+        else:
+            # Pour une modification, vérifier si la date de prélèvement a changé
+            if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
+                old_date = instance._state.fields_cache.get('date_prelevement')
+                if old_date and old_date != instance.date_prelevement:
+                    # La date a changé, vérifier si le nouveau prélèvement doit être traité
+                    if instance.date_prelevement <= date.today() and instance.actif:
+                        processed = instance.process_due_payments()
+                        execution_duration = time.time() - start_time
+                        
+                        # Enregistrer la tâche automatique
+                        AutomatedTask.log_task(
+                            task_type='PAYMENT_PROCESSING',
+                            status='SUCCESS' if processed else 'SUCCESS',
+                            processed_count=1 if processed else 0,
+                            execution_duration=execution_duration,
+                            details={
+                                'trigger': 'modification_prelevement',
+                                'prelevement_id': instance.id,
+                                'description': instance.description,
+                                'ancienne_date': old_date.isoformat(),
+                                'nouvelle_date': instance.date_prelevement.isoformat(),
+                                'montant': str(instance.montant)
+                            },
+                            user=instance.created_by
+                        )
+    
+    except Exception as e:
+        execution_duration = time.time() - start_time
+        # Enregistrer l'erreur
+        AutomatedTask.log_task(
+            task_type='PAYMENT_PROCESSING',
+            status='ERROR',
+            processed_count=0,
+            error_message=str(e),
+            execution_duration=execution_duration,
+            details={
+                'trigger': 'creation_prelevement' if created else 'modification_prelevement',
+                'prelevement_id': instance.id,
+                'description': instance.description
+            },
+            user=instance.created_by
+        )
 
 # Signaux pour le traitement automatique des revenus récurrents
 @receiver(post_save, sender=RecurringIncome)
@@ -315,16 +440,74 @@ def trigger_income_processing(sender, instance, created, **kwargs):
     Signal qui déclenche le traitement automatique des revenus récurrents
     lors de la création ou modification d'un RecurringIncome
     """
-    if created:
-        # Pour un nouveau revenu, vérifier s'il doit être traité immédiatement
-        if instance.date_premier_versement <= date.today():
-            instance.process_due_income()
-    else:
-        # Pour une modification, vérifier si la date de versement a changé
-        if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
-            old_date = instance._state.fields_cache.get('date_premier_versement')
-            if old_date and old_date != instance.date_premier_versement:
-                # La date a changé, vérifier si le nouveau revenu doit être traité
-                if instance.date_premier_versement <= date.today():
-                    instance.process_due_income()
+    start_time = time.time()
+    
+    try:
+        if created:
+            # Pour un nouveau revenu, vérifier s'il doit être traité immédiatement
+            if instance.date_premier_versement <= date.today() and instance.actif:
+                processed = instance.process_due_income()
+                execution_duration = time.time() - start_time
+                
+                # Enregistrer la tâche automatique
+                AutomatedTask.log_task(
+                    task_type='INCOME_PROCESSING',
+                    status='SUCCESS' if processed else 'SUCCESS',
+                    processed_count=1 if processed else 0,
+                    execution_duration=execution_duration,
+                    details={
+                        'trigger': 'creation_revenu',
+                        'revenu_id': instance.id,
+                        'type_revenu': instance.type_revenu,
+                        'description': instance.description,
+                        'date_premier_versement': instance.date_premier_versement.isoformat(),
+                        'montant': str(instance.montant)
+                    },
+                    user=instance.created_by
+                )
+        else:
+            # Pour une modification, vérifier si la date de versement a changé
+            if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
+                old_date = instance._state.fields_cache.get('date_premier_versement')
+                if old_date and old_date != instance.date_premier_versement:
+                    # La date a changé, vérifier si le nouveau revenu doit être traité
+                    if instance.date_premier_versement <= date.today() and instance.actif:
+                        processed = instance.process_due_income()
+                        execution_duration = time.time() - start_time
+                        
+                        # Enregistrer la tâche automatique
+                        AutomatedTask.log_task(
+                            task_type='INCOME_PROCESSING',
+                            status='SUCCESS' if processed else 'SUCCESS',
+                            processed_count=1 if processed else 0,
+                            execution_duration=execution_duration,
+                            details={
+                                'trigger': 'modification_revenu',
+                                'revenu_id': instance.id,
+                                'type_revenu': instance.type_revenu,
+                                'description': instance.description,
+                                'ancienne_date': old_date.isoformat(),
+                                'nouvelle_date': instance.date_premier_versement.isoformat(),
+                                'montant': str(instance.montant)
+                            },
+                            user=instance.created_by
+                        )
+    
+    except Exception as e:
+        execution_duration = time.time() - start_time
+        # Enregistrer l'erreur
+        AutomatedTask.log_task(
+            task_type='INCOME_PROCESSING',
+            status='ERROR',
+            processed_count=0,
+            error_message=str(e),
+            execution_duration=execution_duration,
+            details={
+                'trigger': 'creation_revenu' if created else 'modification_revenu',
+                'revenu_id': instance.id,
+                'type_revenu': instance.type_revenu,
+                'description': instance.description
+            },
+            user=instance.created_by
+        )
     

@@ -7,6 +7,7 @@ Permet de traiter manuellement les prélèvements et revenus à échéance
 import os
 import sys
 import django
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -14,65 +15,171 @@ from decimal import Decimal
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
 
-from my_frais.models import DirectDebit, RecurringIncome, Operation, Account
+from my_frais.models import DirectDebit, RecurringIncome, Operation, Account, AutomatedTask
 
 
 def process_daily_payments():
     """Traite tous les prélèvements à échéance pour aujourd'hui"""
+    start_time = time.time()
     print(f"🔄 Traitement des prélèvements automatiques - {date.today()}")
     print("=" * 60)
     
     try:
         processed_count = DirectDebit.process_all_due_payments()
+        execution_duration = time.time() - start_time
         
         if processed_count > 0:
             print(f"✅ {processed_count} prélèvements traités avec succès")
+            status = 'SUCCESS'
         else:
             print("ℹ️  Aucun prélèvement à traiter aujourd'hui")
+            status = 'SUCCESS'
+        
+        # Enregistrer la tâche automatique
+        AutomatedTask.log_task(
+            task_type='PAYMENT_PROCESSING',
+            status=status,
+            processed_count=processed_count,
+            execution_duration=execution_duration,
+            details={
+                'date_execution': date.today().isoformat(),
+                'heure_execution': datetime.now().strftime('%H:%M:%S'),
+                'type_operation': 'prélèvements'
+            }
+        )
             
         return processed_count
         
     except Exception as e:
+        execution_duration = time.time() - start_time
         print(f"❌ Erreur lors du traitement: {e}")
+        
+        # Enregistrer la tâche en erreur
+        AutomatedTask.log_task(
+            task_type='PAYMENT_PROCESSING',
+            status='ERROR',
+            processed_count=0,
+            error_message=str(e),
+            execution_duration=execution_duration,
+            details={
+                'date_execution': date.today().isoformat(),
+                'heure_execution': datetime.now().strftime('%H:%M:%S'),
+                'type_operation': 'prélèvements'
+            }
+        )
+        
         return 0
 
 
 def process_daily_incomes():
     """Traite tous les revenus à échéance pour aujourd'hui"""
+    start_time = time.time()
     print(f"🔄 Traitement des revenus récurrents - {date.today()}")
     print("=" * 60)
     
     try:
         processed_count = RecurringIncome.process_all_due_incomes()
+        execution_duration = time.time() - start_time
         
         if processed_count > 0:
             print(f"✅ {processed_count} revenus traités avec succès")
+            status = 'SUCCESS'
         else:
             print("ℹ️  Aucun revenu à traiter aujourd'hui")
+            status = 'SUCCESS'
+        
+        # Enregistrer la tâche automatique
+        AutomatedTask.log_task(
+            task_type='INCOME_PROCESSING',
+            status=status,
+            processed_count=processed_count,
+            execution_duration=execution_duration,
+            details={
+                'date_execution': date.today().isoformat(),
+                'heure_execution': datetime.now().strftime('%H:%M:%S'),
+                'type_operation': 'revenus'
+            }
+        )
             
         return processed_count
         
     except Exception as e:
+        execution_duration = time.time() - start_time
         print(f"❌ Erreur lors du traitement: {e}")
+        
+        # Enregistrer la tâche en erreur
+        AutomatedTask.log_task(
+            task_type='INCOME_PROCESSING',
+            status='ERROR',
+            processed_count=0,
+            error_message=str(e),
+            execution_duration=execution_duration,
+            details={
+                'date_execution': date.today().isoformat(),
+                'heure_execution': datetime.now().strftime('%H:%M:%S'),
+                'type_operation': 'revenus'
+            }
+        )
+        
         return 0
 
 
 def process_all_daily_operations():
     """Traite tous les prélèvements et revenus à échéance"""
+    start_time = time.time()
     print(f"🔄 Traitement complet des opérations automatiques - {date.today()}")
     print("=" * 60)
     
-    payments_count = process_daily_payments()
-    incomes_count = process_daily_incomes()
-    
-    total_count = payments_count + incomes_count
-    
-    if total_count > 0:
-        print(f"\n🎉 Traitement terminé: {total_count} opérations au total")
-    else:
-        print(f"\nℹ️  Aucune opération à traiter aujourd'hui")
-    
-    return total_count
+    try:
+        payments_count = process_daily_payments()
+        incomes_count = process_daily_incomes()
+        
+        total_count = payments_count + incomes_count
+        execution_duration = time.time() - start_time
+        
+        if total_count > 0:
+            print(f"\n🎉 Traitement terminé: {total_count} opérations au total")
+            status = 'SUCCESS'
+        else:
+            print(f"\nℹ️  Aucune opération à traiter aujourd'hui")
+            status = 'SUCCESS'
+        
+        # Enregistrer la tâche automatique complète
+        AutomatedTask.log_task(
+            task_type='BOTH_PROCESSING',
+            status=status,
+            processed_count=total_count,
+            execution_duration=execution_duration,
+            details={
+                'date_execution': date.today().isoformat(),
+                'heure_execution': datetime.now().strftime('%H:%M:%S'),
+                'type_operation': 'complet',
+                'prélèvements_traités': payments_count,
+                'revenus_traités': incomes_count
+            }
+        )
+        
+        return total_count
+        
+    except Exception as e:
+        execution_duration = time.time() - start_time
+        print(f"❌ Erreur lors du traitement complet: {e}")
+        
+        # Enregistrer la tâche en erreur
+        AutomatedTask.log_task(
+            task_type='BOTH_PROCESSING',
+            status='ERROR',
+            processed_count=0,
+            error_message=str(e),
+            execution_duration=execution_duration,
+            details={
+                'date_execution': date.today().isoformat(),
+                'heure_execution': datetime.now().strftime('%H:%M:%S'),
+                'type_operation': 'complet'
+            }
+        )
+        
+        return 0
 
 
 def show_due_payments():

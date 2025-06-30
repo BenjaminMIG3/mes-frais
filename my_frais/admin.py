@@ -3,7 +3,7 @@ from django.utils.html import format_html
 from django.urls import reverse
 
 # Ajoute les models de models.py
-from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection
+from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection, AutomatedTask
 
 
 class BaseModelAdmin(admin.ModelAdmin):
@@ -221,6 +221,93 @@ class BudgetProjectionAdmin(admin.ModelAdmin):
         if not change:  # Nouvel objet
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(AutomatedTask)
+class AutomatedTaskAdmin(admin.ModelAdmin):
+    """Administration des tâches automatiques"""
+    list_display = ('task_type_display', 'status_display', 'processed_count', 'execution_date', 'execution_duration_display', 'created_by')
+    list_filter = ('task_type', 'status', 'execution_date', 'created_at')
+    search_fields = ('task_type', 'error_message', 'created_by__username')
+    readonly_fields = ('created_by', 'created_at', 'updated_at', 'execution_date', 'details_formatted')
+    ordering = ('-execution_date',)
+    
+    fieldsets = (
+        ('Informations de la tâche', {
+            'fields': ('task_type', 'status', 'processed_count', 'execution_date', 'execution_duration')
+        }),
+        ('Détails d\'exécution', {
+            'fields': ('error_message', 'details_formatted'),
+            'classes': ('collapse',)
+        }),
+        ('Métadonnées', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def task_type_display(self, obj):
+        """Affichage du type de tâche avec icône"""
+        icons = {
+            'PAYMENT_PROCESSING': '💳',
+            'INCOME_PROCESSING': '💰',
+            'BOTH_PROCESSING': '🔄',
+            'MANUAL_EXECUTION': '👤',
+            'AUTO_TRIGGER': '⚡',
+        }
+        icon = icons.get(obj.task_type, '⚙️')
+        return format_html('{} {}', icon, obj.get_task_type_display())
+    task_type_display.short_description = 'Type de tâche'
+    task_type_display.admin_order_field = 'task_type'
+    
+    def status_display(self, obj):
+        """Affichage du statut avec couleur"""
+        colors = {
+            'SUCCESS': 'green',
+            'ERROR': 'red',
+            'PARTIAL': 'orange',
+        }
+        color = colors.get(obj.status, 'gray')
+        return format_html(
+            '<span style="color: {};">● {}</span>',
+            color,
+            obj.get_status_display()
+        )
+    status_display.short_description = 'Statut'
+    status_display.admin_order_field = 'status'
+    
+    def execution_duration_display(self, obj):
+        """Affichage de la durée d'exécution"""
+        if obj.execution_duration:
+            return f"{obj.execution_duration:.3f}s"
+        return "N/A"
+    execution_duration_display.short_description = 'Durée'
+    execution_duration_display.admin_order_field = 'execution_duration'
+    
+    def details_formatted(self, obj):
+        """Affichage formaté des détails JSON"""
+        if not obj.details:
+            return "Aucun détail"
+        
+        html = "<div style='font-family: monospace; background: #f5f5f5; padding: 10px; border-radius: 4px;'>"
+        for key, value in obj.details.items():
+            html += f"<strong>{key}:</strong> {value}<br>"
+        html += "</div>"
+        return format_html(html)
+    details_formatted.short_description = 'Détails de l\'exécution'
+    
+    def get_queryset(self, request):
+        """Optimise les requêtes avec select_related"""
+        return super().get_queryset(request).select_related('created_by')
+    
+    actions = ['reprocess_failed_tasks']
+    
+    def reprocess_failed_tasks(self, request, queryset):
+        """Action pour reprocesser les tâches en erreur"""
+        failed_tasks = queryset.filter(status='ERROR')
+        count = failed_tasks.count()
+        self.message_user(request, f'{count} tâche(s) en erreur sélectionnée(s) pour reprocessing.')
+    reprocess_failed_tasks.short_description = "Reprocesser les tâches en erreur sélectionnées"
 
 
 # Configuration globale de l'admin

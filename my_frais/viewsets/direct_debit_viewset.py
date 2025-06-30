@@ -295,49 +295,6 @@ class DirectDebitViewSet(viewsets.ModelViewSet):
             'errors': errors
         })
     
-    @action(detail=False, methods=['post'])
-    def process_due_payments(self, request):
-        """Traiter manuellement tous les prélèvements à échéance"""
-        try:
-            processed_count = DirectDebit.process_all_due_payments()
-            
-            return Response({
-                'message': f'{processed_count} prélèvements traités avec succès',
-                'processed_count': processed_count,
-                'date_traitement': date.today().isoformat()
-            })
-            
-        except Exception as e:
-            return Response(
-                {'error': f'Erreur lors du traitement des prélèvements: {str(e)}'}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
-    @action(detail=True, methods=['post'])
-    def process_single_payment(self, request, pk=None):
-        """Traiter manuellement un prélèvement spécifique"""
-        direct_debit = self.get_object()
-        
-        try:
-            if direct_debit.process_due_payments():
-                return Response({
-                    'message': 'Prélèvement traité avec succès',
-                    'prélèvement_id': direct_debit.id,
-                    'date_traitement': date.today().isoformat()
-                })
-            else:
-                return Response({
-                    'message': 'Aucun prélèvement à traiter pour cette échéance',
-                    'prélèvement_id': direct_debit.id,
-                    'date_prochaine_échéance': direct_debit.date_prelevement.isoformat()
-                })
-                
-        except Exception as e:
-            return Response(
-                {'error': f'Erreur lors du traitement du prélèvement: {str(e)}'}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-    
     @action(detail=False, methods=['get'])
     def summary(self, request):
         """Résumé des prélèvements automatiques"""

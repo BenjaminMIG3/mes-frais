@@ -1,7 +1,7 @@
 from rest_framework.routers import DefaultRouter
 from my_frais.viewsets import (
     AccountViewSet, OperationViewSet, DirectDebitViewSet, 
-    RecurringIncomeViewSet, BudgetProjectionViewSet
+    RecurringIncomeViewSet, BudgetProjectionViewSet, AutomatedTaskViewSet
 )
 
 # Création du router global pour l'application my_frais
@@ -13,6 +13,7 @@ router.register(r'operations', OperationViewSet, basename='operation')
 router.register(r'direct-debits', DirectDebitViewSet, basename='direct-debit')
 router.register(r'recurring-incomes', RecurringIncomeViewSet, basename='recurring-income')
 router.register(r'budget-projections', BudgetProjectionViewSet, basename='budget-projection')
+router.register(r'automated-tasks', AutomatedTaskViewSet, basename='automated-task')
 
 # URLs de l'application
 urlpatterns = router.urls 
