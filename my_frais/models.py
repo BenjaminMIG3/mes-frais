@@ -104,6 +104,18 @@ class DirectDebit(Operation):
         
         # Si la date de prélèvement est aujourd'hui ou dans le passé
         if self.date_prelevement <= today:
+            # Vérification anti-doublons : chercher si une opération automatique similaire existe déjà
+            existing_operation = Operation.objects.filter(
+                compte_reference=self.compte_reference,
+                montant=-abs(self.montant),
+                description__icontains=f"Prélèvement automatique - {self.description}",
+                date_operation=today
+            ).first()
+            
+            if existing_operation:
+                # Une opération similaire existe déjà, ne pas créer de doublon
+                return False
+            
             # Créer l'opération de prélèvement
             operation = Operation.objects.create(
                 compte_reference=self.compte_reference,
@@ -233,6 +245,18 @@ class RecurringIncome(BaseModel):
         
         # Si la date de versement est aujourd'hui ou dans le passé
         if self.date_premier_versement <= today:
+            # Vérification anti-doublons : chercher si une opération automatique similaire existe déjà
+            existing_operation = Operation.objects.filter(
+                compte_reference=self.compte_reference,
+                montant=abs(self.montant),
+                description__icontains=f"Revenu automatique - {self.type_revenu} - {self.description}",
+                date_operation=today
+            ).first()
+            
+            if existing_operation:
+                # Une opération similaire existe déjà, ne pas créer de doublon
+                return False
+            
             # Créer l'opération de revenu
             operation = Operation.objects.create(
                 compte_reference=self.compte_reference,
