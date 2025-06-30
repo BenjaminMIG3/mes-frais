@@ -6,6 +6,7 @@ from dateutil.relativedelta import relativedelta
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 import time
+from django.db import transaction
 
 class BaseModel(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='%(class)s_created')
@@ -28,6 +29,13 @@ class Operation(BaseModel):
     montant = models.DecimalField(decimal_places=2, max_digits=20)
     description = models.CharField(max_length=255)
     date_operation = models.DateField(auto_now_add=True)
+    # Ajout d'un champ pour identifier les opérations automatiques
+    source_automatic_id = models.CharField(max_length=100, blank=True, null=True, help_text="ID source pour éviter les doublons")
+    source_type = models.CharField(max_length=20, blank=True, null=True, choices=[
+        ('direct_debit', 'Prélèvement automatique'),
+        ('recurring_income', 'Revenu récurrent'),
+        ('manual', 'Opération manuelle')
+    ], default='manual')
 
     def __str__(self):
         return f"{self.description} - {self.montant}€"
@@ -47,13 +55,15 @@ class DirectDebit(Operation):
     
     def get_next_occurrence(self, from_date=None):
         """Calcule la prochaine occurrence du prélèvement"""
-        if not from_date:
-            from_date = date.today()
+        if from_date is None:
+            # Si aucune date n'est fournie, utiliser la date de prélèvement actuelle
+            current_date = self.date_prelevement
+        else:
+            # Sinon, utiliser la date la plus récente entre la date de prélèvement et from_date
+            current_date = max(self.date_prelevement, from_date)
         
-        if self.echeance and from_date >= self.echeance:
+        if self.echeance and current_date >= self.echeance:
             return None
-        
-        current_date = max(self.date_prelevement, from_date)
         
         if self.frequence == 'Mensuel':
             return current_date + relativedelta(months=1)
@@ -99,40 +109,48 @@ class DirectDebit(Operation):
         if self.echeance and today > self.echeance:
             return False
         
-        # Calculer la prochaine date de prélèvement
-        next_payment_date = self.get_next_occurrence()
-        
         # Si la date de prélèvement est aujourd'hui ou dans le passé
         if self.date_prelevement <= today:
-            # Vérification anti-doublons : chercher si une opération automatique similaire existe déjà
+            # Créer un identifiant unique pour cette occurrence
+            source_id = f"direct_debit_{self.id}_{self.date_prelevement}"
+            
+            # Vérifier si l'opération n'existe pas déjà
             existing_operation = Operation.objects.filter(
-                compte_reference=self.compte_reference,
-                montant=-abs(self.montant),
-                description__icontains=f"Prélèvement automatique - {self.description}",
-                date_operation=today
+                source_automatic_id=source_id,
+                source_type='direct_debit'
             ).first()
             
             if existing_operation:
-                # Une opération similaire existe déjà, ne pas créer de doublon
+                # L'opération existe déjà, ne pas la recréer
                 return False
             
-            # Créer l'opération de prélèvement
-            operation = Operation.objects.create(
-                compte_reference=self.compte_reference,
-                montant=-abs(self.montant),  # Négatif pour les prélèvements
-                description=f"Prélèvement automatique - {self.description}",
-                date_operation=today,
-                created_by=self.created_by
-            )
-            
-            # Mettre à jour le solde du compte
-            self.compte_reference.solde += operation.montant
-            self.compte_reference.save()
+            # Utiliser une transaction pour éviter les conditions de course
+            with transaction.atomic():
+                # Double vérification dans la transaction
+                if Operation.objects.filter(source_automatic_id=source_id, source_type='direct_debit').exists():
+                    return False
+                
+                # Créer l'opération de prélèvement
+                operation = Operation.objects.create(
+                    compte_reference=self.compte_reference,
+                    montant=-abs(self.montant),  # Négatif pour les prélèvements
+                    description=f"Prélèvement automatique - {self.description}",
+                    date_operation=today,
+                    created_by=self.created_by,
+                    source_automatic_id=source_id,
+                    source_type='direct_debit'
+                )
+                
+                # Mettre à jour le solde du compte
+                self.compte_reference.solde += operation.montant
+                self.compte_reference.save()
             
             # Mettre à jour la date de prélèvement pour la prochaine occurrence
+            next_payment_date = self.get_next_occurrence(today)
             if next_payment_date:
+                # Utiliser update pour éviter de déclencher les signaux
+                DirectDebit.objects.filter(id=self.id).update(date_prelevement=next_payment_date)
                 self.date_prelevement = next_payment_date
-                self.save(update_fields=['date_prelevement'])
             
             return True
         
@@ -186,13 +204,15 @@ class RecurringIncome(BaseModel):
 
     def get_next_occurrence(self, from_date=None):
         """Calcule la prochaine occurrence du revenu"""
-        if not from_date:
-            from_date = date.today()
+        if from_date is None:
+            # Si aucune date n'est fournie, utiliser la date de premier versement actuelle
+            current_date = self.date_premier_versement
+        else:
+            # Sinon, utiliser la date la plus récente entre la date de premier versement et from_date
+            current_date = max(self.date_premier_versement, from_date)
         
-        if self.date_fin and from_date >= self.date_fin:
+        if self.date_fin and current_date >= self.date_fin:
             return None
-        
-        current_date = max(self.date_premier_versement, from_date)
         
         if self.frequence == 'Hebdomadaire':
             return current_date + timedelta(weeks=1)
@@ -240,40 +260,48 @@ class RecurringIncome(BaseModel):
         if self.date_fin and today > self.date_fin:
             return False
         
-        # Calculer la prochaine date de versement
-        next_income_date = self.get_next_occurrence()
-        
         # Si la date de versement est aujourd'hui ou dans le passé
         if self.date_premier_versement <= today:
-            # Vérification anti-doublons : chercher si une opération automatique similaire existe déjà
+            # Créer un identifiant unique pour cette occurrence
+            source_id = f"recurring_income_{self.id}_{self.date_premier_versement}"
+            
+            # Vérifier si l'opération n'existe pas déjà
             existing_operation = Operation.objects.filter(
-                compte_reference=self.compte_reference,
-                montant=abs(self.montant),
-                description__icontains=f"Revenu automatique - {self.type_revenu} - {self.description}",
-                date_operation=today
+                source_automatic_id=source_id,
+                source_type='recurring_income'
             ).first()
             
             if existing_operation:
-                # Une opération similaire existe déjà, ne pas créer de doublon
+                # L'opération existe déjà, ne pas la recréer
                 return False
             
-            # Créer l'opération de revenu
-            operation = Operation.objects.create(
-                compte_reference=self.compte_reference,
-                montant=abs(self.montant),  # Positif pour les revenus
-                description=f"Revenu automatique - {self.type_revenu} - {self.description}",
-                date_operation=today,
-                created_by=self.created_by
-            )
-            
-            # Mettre à jour le solde du compte
-            self.compte_reference.solde += operation.montant
-            self.compte_reference.save()
+            # Utiliser une transaction pour éviter les conditions de course
+            with transaction.atomic():
+                # Double vérification dans la transaction
+                if Operation.objects.filter(source_automatic_id=source_id, source_type='recurring_income').exists():
+                    return False
+                
+                # Créer l'opération de revenu
+                operation = Operation.objects.create(
+                    compte_reference=self.compte_reference,
+                    montant=abs(self.montant),  # Positif pour les revenus
+                    description=f"Revenu automatique - {self.type_revenu} - {self.description}",
+                    date_operation=today,
+                    created_by=self.created_by,
+                    source_automatic_id=source_id,
+                    source_type='recurring_income'
+                )
+                
+                # Mettre à jour le solde du compte
+                self.compte_reference.solde += operation.montant
+                self.compte_reference.save()
             
             # Mettre à jour la date de versement pour la prochaine occurrence
+            next_income_date = self.get_next_occurrence(today)
             if next_income_date:
+                # Utiliser update pour éviter de déclencher les signaux
+                RecurringIncome.objects.filter(id=self.id).update(date_premier_versement=next_income_date)
                 self.date_premier_versement = next_income_date
-                self.save(update_fields=['date_premier_versement'])
             
             return True
         
@@ -389,6 +417,11 @@ def trigger_payment_processing(sender, instance, created, **kwargs):
     Signal qui déclenche le traitement automatique des prélèvements
     lors de la création ou modification d'un DirectDebit
     """
+    # Éviter le traitement automatique si c'est une mise à jour via update()
+    # qui ne déclenche pas les signaux
+    if not created and not hasattr(instance, '_state'):
+        return
+    
     start_time = time.time()
     
     try:
@@ -398,47 +431,23 @@ def trigger_payment_processing(sender, instance, created, **kwargs):
                 processed = instance.process_due_payments()
                 execution_duration = time.time() - start_time
                 
-                # Enregistrer la tâche automatique
-                AutomatedTask.log_task(
-                    task_type='PAYMENT_PROCESSING',
-                    status='SUCCESS' if processed else 'SUCCESS',
-                    processed_count=1 if processed else 0,
-                    execution_duration=execution_duration,
-                    details={
-                        'trigger': 'creation_prelevement',
-                        'prelevement_id': instance.id,
-                        'description': instance.description,
-                        'date_prelevement': instance.date_prelevement.isoformat(),
-                        'montant': str(instance.montant)
-                    },
-                    user=instance.created_by
-                )
-        else:
-            # Pour une modification, vérifier si la date de prélèvement a changé
-            if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
-                old_date = instance._state.fields_cache.get('date_prelevement')
-                if old_date and old_date != instance.date_prelevement:
-                    # La date a changé, vérifier si le nouveau prélèvement doit être traité
-                    if instance.date_prelevement <= date.today() and instance.actif:
-                        processed = instance.process_due_payments()
-                        execution_duration = time.time() - start_time
-                        
-                        # Enregistrer la tâche automatique
-                        AutomatedTask.log_task(
-                            task_type='PAYMENT_PROCESSING',
-                            status='SUCCESS' if processed else 'SUCCESS',
-                            processed_count=1 if processed else 0,
-                            execution_duration=execution_duration,
-                            details={
-                                'trigger': 'modification_prelevement',
-                                'prelevement_id': instance.id,
-                                'description': instance.description,
-                                'ancienne_date': old_date.isoformat(),
-                                'nouvelle_date': instance.date_prelevement.isoformat(),
-                                'montant': str(instance.montant)
-                            },
-                            user=instance.created_by
-                        )
+                # Enregistrer la tâche automatique seulement si traitement effectué
+                if processed:
+                    AutomatedTask.log_task(
+                        task_type='PAYMENT_PROCESSING',
+                        status='SUCCESS',
+                        processed_count=1,
+                        execution_duration=execution_duration,
+                        details={
+                            'trigger': 'creation_prelevement',
+                            'prelevement_id': instance.id,
+                            'description': instance.description,
+                            'date_prelevement': instance.date_prelevement.isoformat(),
+                            'montant': str(instance.montant)
+                        },
+                        user=instance.created_by
+                    )
+        # Note: Les modifications sont maintenant gérées via update() qui ne déclenche pas les signaux
     
     except Exception as e:
         execution_duration = time.time() - start_time
@@ -450,7 +459,7 @@ def trigger_payment_processing(sender, instance, created, **kwargs):
             error_message=str(e),
             execution_duration=execution_duration,
             details={
-                'trigger': 'creation_prelevement' if created else 'modification_prelevement',
+                'trigger': 'creation_prelevement',
                 'prelevement_id': instance.id,
                 'description': instance.description
             },
@@ -464,6 +473,11 @@ def trigger_income_processing(sender, instance, created, **kwargs):
     Signal qui déclenche le traitement automatique des revenus récurrents
     lors de la création ou modification d'un RecurringIncome
     """
+    # Éviter le traitement automatique si c'est une mise à jour via update()
+    # qui ne déclenche pas les signaux
+    if not created and not hasattr(instance, '_state'):
+        return
+    
     start_time = time.time()
     
     try:
@@ -473,49 +487,24 @@ def trigger_income_processing(sender, instance, created, **kwargs):
                 processed = instance.process_due_income()
                 execution_duration = time.time() - start_time
                 
-                # Enregistrer la tâche automatique
-                AutomatedTask.log_task(
-                    task_type='INCOME_PROCESSING',
-                    status='SUCCESS' if processed else 'SUCCESS',
-                    processed_count=1 if processed else 0,
-                    execution_duration=execution_duration,
-                    details={
-                        'trigger': 'creation_revenu',
-                        'revenu_id': instance.id,
-                        'type_revenu': instance.type_revenu,
-                        'description': instance.description,
-                        'date_premier_versement': instance.date_premier_versement.isoformat(),
-                        'montant': str(instance.montant)
-                    },
-                    user=instance.created_by
-                )
-        else:
-            # Pour une modification, vérifier si la date de versement a changé
-            if hasattr(instance, '_state') and hasattr(instance._state, 'fields_cache'):
-                old_date = instance._state.fields_cache.get('date_premier_versement')
-                if old_date and old_date != instance.date_premier_versement:
-                    # La date a changé, vérifier si le nouveau revenu doit être traité
-                    if instance.date_premier_versement <= date.today() and instance.actif:
-                        processed = instance.process_due_income()
-                        execution_duration = time.time() - start_time
-                        
-                        # Enregistrer la tâche automatique
-                        AutomatedTask.log_task(
-                            task_type='INCOME_PROCESSING',
-                            status='SUCCESS' if processed else 'SUCCESS',
-                            processed_count=1 if processed else 0,
-                            execution_duration=execution_duration,
-                            details={
-                                'trigger': 'modification_revenu',
-                                'revenu_id': instance.id,
-                                'type_revenu': instance.type_revenu,
-                                'description': instance.description,
-                                'ancienne_date': old_date.isoformat(),
-                                'nouvelle_date': instance.date_premier_versement.isoformat(),
-                                'montant': str(instance.montant)
-                            },
-                            user=instance.created_by
-                        )
+                # Enregistrer la tâche automatique seulement si traitement effectué
+                if processed:
+                    AutomatedTask.log_task(
+                        task_type='INCOME_PROCESSING',
+                        status='SUCCESS',
+                        processed_count=1,
+                        execution_duration=execution_duration,
+                        details={
+                            'trigger': 'creation_revenu',
+                            'revenu_id': instance.id,
+                            'type_revenu': instance.type_revenu,
+                            'description': instance.description,
+                            'date_premier_versement': instance.date_premier_versement.isoformat(),
+                            'montant': str(instance.montant)
+                        },
+                        user=instance.created_by
+                    )
+        # Note: Les modifications sont maintenant gérées via update() qui ne déclenche pas les signaux
     
     except Exception as e:
         execution_duration = time.time() - start_time
@@ -527,7 +516,7 @@ def trigger_income_processing(sender, instance, created, **kwargs):
             error_message=str(e),
             execution_duration=execution_duration,
             details={
-                'trigger': 'creation_revenu' if created else 'modification_revenu',
+                'trigger': 'creation_revenu',
                 'revenu_id': instance.id,
                 'type_revenu': instance.type_revenu,
                 'description': instance.description

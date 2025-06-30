@@ -173,17 +173,19 @@ class DirectDebitModelTestCase(TestCase):
     
     def test_direct_debit_get_next_occurrence(self):
         """Test de calcul de la prochaine occurrence"""
+        # Utiliser une date future pour éviter le déclenchement automatique des signaux
+        future_date = date.today() + timedelta(days=5)
         direct_debit = DirectDebit.objects.create(
             compte_reference=self.account,
             montant=Decimal('50.00'),
             description="Test mensuel",
-            date_prelevement=date.today(),
+            date_prelevement=future_date,
             frequence='Mensuel',
             created_by=self.user
         )
         
         next_occurrence = direct_debit.get_next_occurrence()
-        expected_date = date.today() + relativedelta(months=1)
+        expected_date = future_date + relativedelta(months=1)
         self.assertEqual(next_occurrence, expected_date)
     
     def test_direct_debit_get_occurrences_until(self):
@@ -208,6 +210,36 @@ class DirectDebitModelTestCase(TestCase):
             self.assertIn('type', occurrence)
             self.assertEqual(occurrence['type'], 'prelevement')
             self.assertLess(occurrence['montant'], 0)  # Négatif pour prélèvements
+    
+    def test_direct_debit_automatic_processing_no_duplicates(self):
+        """Test que les prélèvements automatiques ne créent pas de doublons"""
+        # Créer un prélèvement avec date d'aujourd'hui (devrait déclencher le traitement automatique)
+        direct_debit = DirectDebit.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('100.00'),
+            description="Test automatique",
+            date_prelevement=date.today(),
+            frequence='Mensuel',
+            created_by=self.user
+        )
+        
+        # Vérifier qu'une opération a été créée automatiquement
+        operations = Operation.objects.filter(
+            source_type='direct_debit',
+            description__contains="Prélèvement automatique"
+        )
+        self.assertEqual(operations.count(), 1)
+        
+        # Essayer de traiter à nouveau manuellement - ne devrait pas créer de doublon
+        processed = direct_debit.process_due_payments()
+        self.assertFalse(processed)  # Devrait retourner False car déjà traité
+        
+        # Vérifier qu'il n'y a toujours qu'une seule opération
+        operations_after = Operation.objects.filter(
+            source_type='direct_debit',
+            description__contains="Prélèvement automatique"
+        )
+        self.assertEqual(operations_after.count(), 1)
 
 
 class RecurringIncomeModelTestCase(TestCase):
@@ -259,17 +291,19 @@ class RecurringIncomeModelTestCase(TestCase):
     
     def test_recurring_income_get_next_occurrence(self):
         """Test de calcul de la prochaine occurrence"""
+        # Utiliser une date future pour éviter le déclenchement automatique des signaux
+        future_date = date.today() + timedelta(days=5)
         income = RecurringIncome.objects.create(
             compte_reference=self.account,
             montant=Decimal('2500.00'),
             description="Salaire",
-            date_premier_versement=date.today(),
+            date_premier_versement=future_date,
             frequence='Mensuel',
             created_by=self.user
         )
         
         next_occurrence = income.get_next_occurrence()
-        expected_date = date.today() + relativedelta(months=1)
+        expected_date = future_date + relativedelta(months=1)
         self.assertEqual(next_occurrence, expected_date)
     
     def test_recurring_income_get_occurrences_until(self):
@@ -294,6 +328,37 @@ class RecurringIncomeModelTestCase(TestCase):
             self.assertIn('type', occurrence)
             self.assertEqual(occurrence['type'], 'revenu')
             self.assertGreater(occurrence['montant'], 0)  # Positif pour revenus
+    
+    def test_recurring_income_automatic_processing_no_duplicates(self):
+        """Test que les revenus récurrents automatiques ne créent pas de doublons"""
+        # Créer un revenu avec date d'aujourd'hui (devrait déclencher le traitement automatique)
+        income = RecurringIncome.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('2500.00'),
+            description="Salaire automatique",
+            date_premier_versement=date.today(),
+            frequence='Mensuel',
+            type_revenu='Salaire',
+            created_by=self.user
+        )
+        
+        # Vérifier qu'une opération a été créée automatiquement
+        operations = Operation.objects.filter(
+            source_type='recurring_income',
+            description__contains="Revenu automatique"
+        )
+        self.assertEqual(operations.count(), 1)
+        
+        # Essayer de traiter à nouveau manuellement - ne devrait pas créer de doublon
+        processed = income.process_due_income()
+        self.assertFalse(processed)  # Devrait retourner False car déjà traité
+        
+        # Vérifier qu'il n'y a toujours qu'une seule opération
+        operations_after = Operation.objects.filter(
+            source_type='recurring_income',
+            description__contains="Revenu automatique"
+        )
+        self.assertEqual(operations_after.count(), 1)
 
 
 class BudgetProjectionModelTestCase(TestCase):
@@ -568,7 +633,7 @@ class AccountViewSetTestCase(APITestCase):
         self.assertFalse(Account.objects.filter(id=self.account.id).exists())
     
     def test_delete_account_with_operations(self):
-        """Test de suppression d'un compte avec opérations (doit échouer)"""
+        """Test de suppression d'un compte avec opérations (maintenant autorisé)"""
         # Ajouter une opération
         Operation.objects.create(
             compte_reference=self.account,
@@ -579,8 +644,9 @@ class AccountViewSetTestCase(APITestCase):
         
         response = self.client.delete(self.account_detail_url)
         
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(Account.objects.filter(id=self.account.id).exists())
+        # La suppression doit maintenant réussir (cascade delete)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Account.objects.filter(id=self.account.id).exists())
     
     def test_account_operations_action(self):
         """Test de l'action personnalisée pour récupérer les opérations"""
