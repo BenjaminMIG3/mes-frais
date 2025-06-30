@@ -31,6 +31,16 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['192.168.1.66', 'chatforall.online', 'www.chatforall.online', 'localhost', '127.0.0.1', '192.168.1.179']
 
+# Configuration CSRF pour autoriser les domaines
+CSRF_TRUSTED_ORIGINS = [
+    'https://chatforall.online',
+    'https://www.chatforall.online',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://192.168.1.66:8000',
+    'http://192.168.1.179:8000',
+]
+
 # Application definition
 
 INSTALLED_APPS = [

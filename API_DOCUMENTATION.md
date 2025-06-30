@@ -1,6 +1,6 @@
 # 📊 API Documentation - Mes Frais
 
-Cette documentation présente une API REST complète pour la gestion de frais personnels et budgets familiaux. L'API permet de gérer des comptes bancaires, opérations financières, prélèvements automatiques, revenus récurrents et projections budgétaires.
+Cette documentation présente une API REST complète pour la gestion de frais personnels et budgets familiaux. L'API permet de gérer des comptes bancaires, opérations financières, prélèvements automatiques, revenus récurrents, projections budgétaires et **tâches automatiques**.
 
 ## 🏗️ Architecture et Relations
 
@@ -12,6 +12,7 @@ User (Utilisateur Django)
 │   │   └── DirectDebit (Prélèvement - hérite d'Operation)
 │   ├── RecurringIncome (Revenu récurrent)
 │   └── BudgetProjection (Projection budgétaire)
+└── AutomatedTask (Tâche automatique - traçabilité)
 ```
 
 ### Relations Clés :
@@ -20,6 +21,7 @@ User (Utilisateur Django)
 - **Operation → DirectDebit** : Les prélèvements sont des opérations spécialisées (héritage)
 - **Account → RecurringIncome** : Un compte peut avoir plusieurs revenus récurrents (1-N)
 - **Account → BudgetProjection** : Un compte peut avoir plusieurs projections (1-N)
+- **User → AutomatedTask** : Un utilisateur peut avoir plusieurs tâches automatiques (1-N)
 
 ## 🔐 Authentification & Sécurité
 
@@ -52,7 +54,7 @@ Content-Type: application/json
 - **403** : Accès interdit
 - **404** : Ressource non trouvée
 
-## 📋 Résumé des Endpoints (49 routes total)
+## 📋 Résumé des Endpoints (58 routes total)
 
 | Modèle | Routes CRUD | Actions Spécialisées | Total |
 |--------|-------------|---------------------|-------|
@@ -61,6 +63,7 @@ Content-Type: application/json
 | **DirectDebit** | 5 | 7 | 12 |
 | **RecurringIncome** | 5 | 6 | 11 |
 | **BudgetProjection** | 5 | 3 | 8 |
+| **AutomatedTask** | 1 | 4 | 5 |
 
 ### Actions les Plus Importantes pour un LLM :
 1. **`GET /accounts/`** - Point d'entrée principal
@@ -68,11 +71,14 @@ Content-Type: application/json
 3. **`GET /budget-projections/dashboard/`** - Vue d'ensemble complète
 4. **`POST /budget-projections/calculate/`** - Projections temps réel
 5. **`GET /operations/search/`** - Recherche avancée d'opérations
+6. **`GET /automated-tasks/statistics/`** - Statistiques des tâches automatiques
 
 ### Logique des Relations :
 - **User** ← has many → **Account** ← has many → **Operation/DirectDebit/RecurringIncome/BudgetProjection**
 - **DirectDebit** IS-A **Operation** (héritage)
+- **User** ← has many → **AutomatedTask** (traçabilité)
 - Toutes les modifications d'**Operation** mettent à jour **Account.solde** automatiquement
+- **Signaux automatiques** : Création/modification de **DirectDebit** et **RecurringIncome** déclenche le traitement automatique
 
 ---
 
@@ -201,44 +207,78 @@ Content-Type: application/json
 }
 ```
 
-#### **GET** `/api/accounts/summary/` - Résumé de tous les comptes
+**Response:**
+```json
+{
+  "ajustement": 100.00,
+  "ancien_solde": 1250.75,
+  "nouveau_solde": 1350.75,
+  "operation_created": true
+}
+```
+
+#### **GET** `/api/accounts/summary/` - Résumé global des comptes
 **Response:**
 ```json
 {
   "total_comptes": 3,
-  "total_solde": 5000.75,
+  "total_solde": 3250.75,
+  "comptes_positifs": 2,
   "comptes_negatifs": 1,
-  "comptes_positifs": 2
+  "comptes": [
+    {
+      "id": 1,
+      "nom": "Compte courant",
+      "solde": "1250.75",
+      "operations_count": 15
+    }
+  ]
 }
 ```
 
-#### **GET** `/api/accounts/global_overview/` - Vue d'ensemble globale
-**Response:** Données complètes pour dashboard avec détails par compte
+#### **GET** `/api/accounts/global_overview/` - Vue d'ensemble complète
+**Response:**
+```json
+{
+  "summary": {
+    "total_comptes": 3,
+    "total_solde": 3250.75,
+    "comptes_positifs": 2,
+    "comptes_negatifs": 1
+  },
+  "recent_activity": {
+    "operations_7_jours": 12,
+    "operations_30_jours": 45,
+    "prélèvements_actifs": 5,
+    "revenus_actifs": 3
+  },
+  "alerts": {
+    "comptes_negatifs": 1,
+    "prélèvements_imminents": 2
+  }
+}
+```
 
 ---
 
 ## 💰 2. OPERATIONS (Opérations Financières)
 
-**Entité de transaction** : Représente une transaction financière sur un compte (crédit ou débit).
+**Entité de base** : Représente une opération financière sur un compte.
 
 **Base route:** `/api/operations/`
 **Modèle Django:** `Operation`
 **Relations:**
 - Appartient à : `Account` (compte de référence)
-- Parent de : `DirectDebit` (prélèvement automatique)
+- Créé par : `User` (utilisateur créateur)
 
 **Champs principaux:**
 - `id` (integer, auto) : Identifiant unique
-- `compte_reference` (foreign key) : Compte concerné par l'opération
-- `montant` (decimal) : Montant de l'opération (positif=crédit, négatif=débit)
+- `compte_reference` (foreign key) : Compte concerné
+- `montant` (decimal) : Montant de l'opération (positif = crédit, négatif = débit)
 - `description` (string, max 255 chars) : Description de l'opération
-- `date_operation` (date, auto) : Date de l'opération
-- `created_by` (foreign key) : Utilisateur qui a créé l'opération
-
-**Logique métier :**
-- Le solde du compte est automatiquement mis à jour lors des opérations CRUD
-- Les montants peuvent être positifs (revenus) ou négatifs (dépenses)
-- Validation : montant ne peut pas être zéro
+- `date_operation` (date) : Date de l'opération (défaut: aujourd'hui)
+- `created_by` (foreign key) : Utilisateur créateur
+- `created_at/updated_at` (datetime) : Timestamps automatiques
 
 ### 📋 Routes CRUD Standard
 
@@ -249,7 +289,9 @@ Content-Type: application/json
   "compte_reference": "integer (optionnel)",
   "created_by": "integer (optionnel)",
   "search": "string (optionnel)",
-  "ordering": "string (montant, created_at, updated_at)"
+  "ordering": "string (montant, created_at, updated_at, -created_at)",
+  "page": "integer (optionnel)",
+  "page_size": "integer (optionnel)"
 }
 ```
 
@@ -260,8 +302,8 @@ Content-Type: application/json
     "id": 1,
     "compte_reference_username": "john_doe",
     "montant": "250.00",
-    "description": "Salaire",
-    "created_at": "2024-01-15T10:30:00Z"
+    "description": "Salaire mensuel",
+    "created_at": "2024-01-15T10:30:00.123Z"
   }
 ]
 ```
@@ -272,49 +314,73 @@ Content-Type: application/json
 {
   "compte_reference": 1,
   "montant": "250.00",
-  "description": "Virement reçu"
+  "description": "Salaire mensuel",
+  "date_operation": "2024-01-15"
 }
 ```
 
 **Response:**
 ```json
 {
-  "id": 2,
+  "id": 1,
   "compte_reference": 1,
   "compte_reference_username": "john_doe",
   "montant": "250.00",
-  "description": "Virement reçu",
+  "description": "Salaire mensuel",
+  "date_operation": "2024-01-15",
   "created_by": 1,
   "created_by_username": "john_doe",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:00Z"
+  "created_at": "2024-01-15T10:30:00.123Z",
+  "updated_at": "2024-01-15T10:30:00.123Z"
 }
 ```
 
+#### **GET** `/api/operations/{id}/` - Détail d'une opération
+**Response:** Structure identique au POST response
+
 #### **PUT/PATCH** `/api/operations/{id}/` - Modifier une opération
-**Body:** Structure identique au POST
+**Body:**
+```json
+{
+  "montant": "275.00",
+  "description": "Salaire mensuel + prime"
+}
+```
 
 #### **DELETE** `/api/operations/{id}/` - Supprimer une opération
-**Response:** `204 No Content` (solde automatiquement ajusté)
+**Response:** `204 No Content`
 
 ### 🎯 Actions Personnalisées
 
-#### **GET** `/api/operations/statistics/` - Statistiques des opérations
+#### **GET** `/api/operations/statistics/` - Statistiques globales
 **Response:**
 ```json
 {
   "statistics": {
-    "total_operations": 50,
-    "total_montant": 12500.75,
-    "operations_30_jours": 15,
-    "montant_30_jours": 3500.25,
-    "operations_7_jours": 5,
-    "montant_7_jours": 750.00,
-    "operations_positives": 30,
-    "montant_positif": 15000.00,
-    "operations_negatives": 20,
-    "montant_negatif": -2500.00
+    "total_operations": 150,
+    "total_montant": 2500.75,
+    "operations_30_jours": 45,
+    "montant_30_jours": 1200.50,
+    "operations_7_jours": 12,
+    "montant_7_jours": 350.25,
+    "operations_positives": 80,
+    "montant_positif": 3200.00,
+    "operations_negatives": 70,
+    "montant_negatif": -700.25
   }
+}
+```
+
+#### **GET** `/api/operations/search/` - Recherche avancée
+**Query Parameters:**
+```json
+{
+  "q": "string (recherche textuelle)",
+  "montant_min": "decimal (optionnel)",
+  "montant_max": "decimal (optionnel)",
+  "date_debut": "date (optionnel)",
+  "date_fin": "date (optionnel)",
+  "compte_reference": "integer (optionnel)"
 }
 ```
 
@@ -325,26 +391,14 @@ Content-Type: application/json
   {
     "account_id": 1,
     "account_username": "john_doe",
-    "operations_count": 15,
-    "total_montant": 2500.75,
-    "operations": [...]
+    "operations": [...],
+    "total_operations": 15,
+    "total_montant": 1250.75
   }
 ]
 ```
 
-#### **GET** `/api/operations/search/` - Recherche avancée
-**Query Parameters:**
-```json
-{
-  "q": "string (optionnel)",
-  "min_montant": "decimal (optionnel)",
-  "max_montant": "decimal (optionnel)",
-  "date_debut": "date YYYY-MM-DD (optionnel)",
-  "date_fin": "date YYYY-MM-DD (optionnel)"
-}
-```
-
-#### **POST** `/api/operations/bulk_create/` - Créer plusieurs opérations
+#### **POST** `/api/operations/bulk_create/` - Création en lot
 **Body:**
 ```json
 {
@@ -352,12 +406,12 @@ Content-Type: application/json
     {
       "compte_reference": 1,
       "montant": "100.00",
-      "description": "Achat 1"
+      "description": "Opération 1"
     },
     {
       "compte_reference": 1,
       "montant": "-50.00",
-      "description": "Achat 2"
+      "description": "Opération 2"
     }
   ]
 }
@@ -365,27 +419,21 @@ Content-Type: application/json
 
 ---
 
-## 🔄 3. DIRECT-DEBITS (Prélèvements Automatiques)
+## 💳 3. DIRECT-DEBITS (Prélèvements Automatiques)
 
-**Entité spécialisée** : Hérite d'Operation, représente des prélèvements récurrents automatiques.
+**Entité spécialisée** : Hérite d'Operation, représente un prélèvement automatique récurrent.
 
 **Base route:** `/api/direct-debits/`
-**Modèle Django:** `DirectDebit` (hérite d'`Operation`)
+**Modèle Django:** `DirectDebit` (hérite de `Operation`)
 **Relations:**
-- Hérite de : `Operation` (toutes les propriétés + champs spécialisés)
-- Appartient à : `Account` (via Operation.compte_reference)
+- Hérite de : `Operation`
+- Appartient à : `Account` (compte de référence)
 
-**Champs spécialisés (en plus d'Operation):**
-- `date_prelevement` (date) : Date du premier prélèvement
-- `echeance` (date, nullable) : Date de fin des prélèvements (null = illimité)
-- `frequence` (enum) : "Mensuel", "Trimestriel", "Annuel"
-- `actif` (boolean, default=true) : Statut actif/inactif
-
-**Logique métier :**
-- Calculs automatiques des prochaines occurrences selon la fréquence
-- Validation : date_prelevement et echeance ne peuvent pas être dans le passé
-- Validation : echeance doit être >= date_prelevement
-- Méthodes disponibles : `get_next_occurrence()`, `get_occurrences_until(date)`
+**Champs spécifiques:**
+- `date_prelevement` (date) : Date du prochain prélèvement
+- `frequence` (string) : Fréquence (Mensuel, Trimestriel, Semestriel, Annuel)
+- `actif` (boolean) : Si le prélèvement est actif
+- `echeance` (date, optionnel) : Date de fin du prélèvement
 
 ### 📋 Routes CRUD Standard
 
@@ -394,9 +442,10 @@ Content-Type: application/json
 ```json
 {
   "compte_reference": "integer (optionnel)",
-  "created_by": "integer (optionnel)",
+  "actif": "boolean (optionnel)",
+  "frequence": "string (optionnel)",
   "search": "string (optionnel)",
-  "ordering": "string (montant, date_prelevement, echeance, created_at)"
+  "ordering": "string (date_prelevement, montant, created_at)"
 }
 ```
 
@@ -406,12 +455,12 @@ Content-Type: application/json
   {
     "id": 1,
     "compte_reference_username": "john_doe",
-    "montant": "150.00",
-    "description": "Abonnement internet",
+    "montant": "50.00",
+    "description": "Électricité",
     "date_prelevement": "2024-02-01",
-    "echeance": null,
-    "is_active": true,
-    "created_at": "2024-01-15T10:30:00Z"
+    "frequence": "Mensuel",
+    "actif": true,
+    "echeance": "2024-12-31"
   }
 ]
 ```
@@ -421,42 +470,14 @@ Content-Type: application/json
 ```json
 {
   "compte_reference": 1,
-  "montant": "150.00",
-  "description": "Abonnement mensuel",
+  "montant": "50.00",
+  "description": "Électricité",
   "date_prelevement": "2024-02-01",
-  "echeance": "2024-12-31",
-  "frequence": "Mensuel"
+  "frequence": "Mensuel",
+  "actif": true,
+  "echeance": "2024-12-31"
 }
 ```
-
-**Response:**
-```json
-{
-  "id": 2,
-  "compte_reference": 1,
-  "compte_reference_username": "john_doe",
-  "montant": "150.00",
-  "description": "Abonnement mensuel",
-  "date_prelevement": "2024-02-01",
-  "echeance": "2024-12-31",
-  "created_by": 1,
-  "created_by_username": "john_doe",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:00Z",
-  "is_active": true
-}
-```
-
-**Choix pour `frequence`:**
-- `"Mensuel"`
-- `"Trimestriel"`
-- `"Annuel"`
-
-#### **PUT/PATCH** `/api/direct-debits/{id}/` - Modifier un prélèvement
-**Body:** Structure identique au POST (sans compte_reference)
-
-#### **DELETE** `/api/direct-debits/{id}/` - Supprimer un prélèvement
-**Response:** `204 No Content`
 
 ### 🎯 Actions Personnalisées
 
@@ -464,8 +485,9 @@ Content-Type: application/json
 **Response:**
 ```json
 {
-  "active_count": 5,
-  "prélèvements_actifs": [...]
+  "count": 5,
+  "prélèvements": [...],
+  "total_montant": 250.00
 }
 ```
 
@@ -473,39 +495,20 @@ Content-Type: application/json
 **Response:**
 ```json
 {
-  "expired_count": 2,
-  "prélèvements_expirés": [...]
+  "count": 2,
+  "prélèvements": [...]
 }
 ```
 
-#### **GET** `/api/direct-debits/upcoming/` - Prélèvements à venir (30 jours)
+#### **GET** `/api/direct-debits/upcoming/` - Prélèvements à venir
 **Response:**
 ```json
 {
-  "upcoming_count": 3,
-  "prélèvements_à_venir": [...]
+  "count": 3,
+  "prélèvements": [...],
+  "prochain_prélèvement": "2024-02-01"
 }
 ```
-
-#### **GET** `/api/direct-debits/statistics/` - Statistiques des prélèvements
-**Response:**
-```json
-{
-  "statistics": {
-    "total_prélèvements": 10,
-    "total_montant": 1500.00,
-    "prélèvements_actifs": 8,
-    "montant_actifs": 1200.00,
-    "prélèvements_expirés": 2,
-    "montant_expirés": 300.00,
-    "prélèvements_ce_mois": 5,
-    "montant_ce_mois": 750.00
-  }
-}
-```
-
-#### **GET** `/api/direct-debits/by_account/` - Prélèvements par compte
-**Response:** Groupement par compte avec statistiques
 
 #### **POST** `/api/direct-debits/{id}/extend/` - Prolonger l'échéance
 **Body:**
@@ -515,43 +518,74 @@ Content-Type: application/json
 }
 ```
 
-#### **POST** `/api/direct-debits/bulk_update_status/` - Mise à jour en lot
+#### **POST** `/api/direct-debits/bulk_status/` - Mise à jour groupée du statut
 **Body:**
 ```json
 {
-  "ids": [1, 2, 3],
+  "prélèvements_ids": [1, 2, 3],
   "actif": false
+}
+```
+
+#### **GET** `/api/direct-debits/statistics/` - Statistiques des prélèvements
+**Response:**
+```json
+{
+  "statistics": {
+    "total_prélèvements": 8,
+    "prélèvements_actifs": 5,
+    "prélèvements_expirés": 3,
+    "total_montant_actif": 350.00,
+    "prélèvements_ce_mois": 2,
+    "montant_ce_mois": 100.00
+  }
+}
+```
+
+#### **GET** `/api/direct-debits/dashboard/` - Tableau de bord
+**Response:**
+```json
+{
+  "summary": {
+    "total_prélèvements": 8,
+    "prélèvements_actifs": 5,
+    "total_montant": 350.00
+  },
+  "upcoming": {
+    "prochain_prélèvement": "2024-02-01",
+    "prélèvements_7_jours": 2,
+    "montant_7_jours": 100.00
+  },
+  "by_frequency": {
+    "Mensuel": 3,
+    "Trimestriel": 2,
+    "Annuel": 3
+  }
 }
 ```
 
 ---
 
-## 💵 4. RECURRING-INCOMES (Revenus Récurrents)
+## 💰 4. RECURRING-INCOMES (Revenus Récurrents)
 
-**Entité de revenu** : Représente des revenus récurrents (salaires, subventions, aides, etc.).
+**Entité spécialisée** : Représente un revenu récurrent (salaire, allocation, etc.).
 
 **Base route:** `/api/recurring-incomes/`
 **Modèle Django:** `RecurringIncome`
 **Relations:**
-- Appartient à : `Account` (compte de destination)
+- Appartient à : `Account` (compte de référence)
+- Créé par : `User` (utilisateur créateur)
 
 **Champs principaux:**
 - `id` (integer, auto) : Identifiant unique
-- `compte_reference` (foreign key) : Compte de destination du revenu
-- `montant` (decimal, positif) : Montant du revenu
-- `description` (string, max 255 chars) : Description du revenu
+- `compte_reference` (foreign key) : Compte de destination
+- `montant` (decimal) : Montant du revenu
+- `description` (string) : Description du revenu
+- `type_revenu` (string) : Type (Salaire, Allocation, Prime, etc.)
 - `date_premier_versement` (date) : Date du premier versement
-- `date_fin` (date, nullable) : Date de fin des versements (null = illimité)
-- `frequence` (enum) : "Hebdomadaire", "Mensuel", "Trimestriel", "Annuel"
-- `actif` (boolean, default=true) : Statut actif/inactif
-- `type_revenu` (enum) : "Salaire", "Subvention", "Aide", "Pension", "Loyer", "Autre"
-
-**Logique métier :**
-- Calculs automatiques des prochaines occurrences selon la fréquence
-- Conversion automatique en équivalent mensuel pour les projections
-- Validation : montant doit être positif
-- Validation : dates cohérentes (date_fin >= date_premier_versement)
-- Méthodes disponibles : `get_next_occurrence()`, `get_occurrences_until(date)`
+- `frequence` (string) : Fréquence (Mensuel, Trimestriel, etc.)
+- `actif` (boolean) : Si le revenu est actif
+- `echeance` (date, optionnel) : Date de fin
 
 ### 📋 Routes CRUD Standard
 
@@ -560,11 +594,11 @@ Content-Type: application/json
 ```json
 {
   "compte_reference": "integer (optionnel)",
+  "actif": "boolean (optionnel)",
   "type_revenu": "string (optionnel)",
   "frequence": "string (optionnel)",
-  "actif": "boolean (optionnel)",
   "search": "string (optionnel)",
-  "ordering": "string (montant, date_premier_versement, created_at)"
+  "ordering": "string (date_premier_versement, montant, created_at)"
 }
 ```
 
@@ -575,14 +609,11 @@ Content-Type: application/json
     "id": 1,
     "compte_reference_username": "john_doe",
     "montant": "2500.00",
-    "description": "Salaire principal",
-    "date_premier_versement": "2024-01-01",
-    "date_fin": null,
-    "frequence": "Mensuel",
+    "description": "Salaire Net",
     "type_revenu": "Salaire",
-    "is_active": true,
-    "next_occurrence": "2024-02-01",
-    "created_at": "2024-01-15T10:30:00Z"
+    "date_premier_versement": "2024-01-25",
+    "frequence": "Mensuel",
+    "actif": true
   }
 ]
 ```
@@ -593,131 +624,37 @@ Content-Type: application/json
 {
   "compte_reference": 1,
   "montant": "2500.00",
-  "description": "Salaire mensuel",
-  "date_premier_versement": "2024-02-01",
-  "date_fin": null,
-  "frequence": "Mensuel",
-  "actif": true,
-  "type_revenu": "Salaire"
-}
-```
-
-**Choix pour `type_revenu`:**
-- `"Salaire"`
-- `"Subvention"`
-- `"Aide"`
-- `"Pension"`
-- `"Loyer"`
-- `"Autre"`
-
-**Choix pour `frequence`:**
-- `"Hebdomadaire"`
-- `"Mensuel"`
-- `"Trimestriel"`
-- `"Annuel"`
-
-**Response:**
-```json
-{
-  "id": 2,
-  "compte_reference": 1,
-  "compte_reference_username": "john_doe",
-  "montant": "2500.00",
-  "description": "Salaire mensuel",
-  "date_premier_versement": "2024-02-01",
-  "date_fin": null,
-  "frequence": "Mensuel",
-  "actif": true,
+  "description": "Salaire Net",
   "type_revenu": "Salaire",
-  "created_by": 1,
-  "created_by_username": "john_doe",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:00Z",
-  "is_active": true,
-  "next_occurrence": "2024-02-01"
+  "date_premier_versement": "2024-01-25",
+  "frequence": "Mensuel",
+  "actif": true
 }
 ```
-
-#### **PUT/PATCH** `/api/recurring-incomes/{id}/` - Modifier un revenu
-**Body:** Structure identique au POST (sans compte_reference)
-
-#### **DELETE** `/api/recurring-incomes/{id}/` - Supprimer un revenu
-**Response:** `204 No Content`
 
 ### 🎯 Actions Personnalisées
 
-#### **GET** `/api/recurring-incomes/statistics/` - Statistiques des revenus
+#### **GET** `/api/recurring-incomes/active/` - Revenus actifs
 **Response:**
 ```json
 {
-  "statistics": {
-    "total_revenus": 5,
-    "revenus_actifs": 4,
-    "montant_mensuel_equivalent": 3500.00,
-    "montant_annuel_equivalent": 42000.00,
-    "par_type": {
-      "Salaire": {"count": 2, "montant_total": 5000.00},
-      "Subvention": {"count": 1, "montant_total": 500.00}
-    },
-    "par_frequence": {
-      "Mensuel": 3,
-      "Trimestriel": 1
-    }
-  }
-}
-```
-
-#### **GET** `/api/recurring-incomes/by_account/` - Revenus par compte
-**Response:** Groupement par compte avec montants équivalents mensuels
-
-#### **GET** `/api/recurring-incomes/active/` - Revenus actifs uniquement
-**Response:**
-```json
-{
-  "count": 4,
-  "revenus": [...]
-}
-```
-
-#### **GET** `/api/recurring-incomes/upcoming/` - Prochaines occurrences
-**Query Parameters:**
-```json
-{
-  "days": "integer (défaut: 30)"
-}
-```
-
-**Response:**
-```json
-{
-  "periode": "30 jours",
   "count": 3,
-  "revenus": [
-    {
-      "id": 1,
-      "description": "Salaire principal",
-      "type_revenu": "Salaire",
-      "montant": 2500.00,
-      "date_occurrence": "2024-02-01",
-      "jours_restants": 15,
-      "compte": "Compte courant"
-    }
-  ]
+  "revenus": [...],
+  "total_montant": 3500.00
 }
 ```
 
-#### **GET** `/api/recurring-incomes/projections/` - Projections de revenus
-**Query Parameters:**
+#### **GET** `/api/recurring-incomes/upcoming/` - Revenus à venir
+**Response:**
 ```json
 {
-  "mois": "integer (défaut: 12)"
+  "count": 2,
+  "revenus": [...],
+  "prochain_versement": "2024-01-25"
 }
 ```
 
-#### **POST** `/api/recurring-incomes/{id}/toggle_active/` - Activer/désactiver
-**Response:** Statut mis à jour
-
-#### **POST** `/api/recurring-incomes/bulk_create/` - Créer plusieurs revenus
+#### **POST** `/api/recurring-incomes/bulk_create/` - Création en lot
 **Body:**
 ```json
 {
@@ -727,61 +664,83 @@ Content-Type: application/json
       "montant": "2500.00",
       "description": "Salaire",
       "type_revenu": "Salaire",
+      "date_premier_versement": "2024-01-25",
       "frequence": "Mensuel"
     }
   ]
 }
 ```
 
+#### **POST** `/api/recurring-incomes/{id}/toggle/` - Activer/Désactiver
+**Response:**
+```json
+{
+  "actif": false,
+  "message": "Revenu désactivé avec succès"
+}
+```
+
+#### **GET** `/api/recurring-incomes/statistics/` - Statistiques des revenus
+**Response:**
+```json
+{
+  "statistics": {
+    "total_revenus": 5,
+    "revenus_actifs": 3,
+    "total_montant_actif": 3500.00,
+    "revenus_ce_mois": 2,
+    "montant_ce_mois": 2500.00,
+    "by_type": {
+      "Salaire": 2,
+      "Allocation": 1,
+      "Prime": 2
+    }
+  }
+}
+```
+
+#### **GET** `/api/recurring-incomes/projections/` - Projections futures
+**Query Parameters:**
+```json
+{
+  "mois": "integer (optionnel, défaut: 6)"
+}
+```
+
+**Response:**
+```json
+{
+  "projections": [
+    {
+      "mois": "2024-01",
+      "total_montant": 3500.00,
+      "revenus_count": 3
+    }
+  ],
+  "total_projection": 21000.00
+}
+```
+
 ---
 
-## 📈 5. BUDGET-PROJECTIONS (Projections Budgétaires)
+## 📊 5. BUDGET-PROJECTIONS (Projections Budgétaires)
 
-**Entité analytique** : Stocke et calcule des projections budgétaires sur plusieurs mois.
+**Entité de projection** : Permet de calculer et sauvegarder des projections budgétaires.
 
 **Base route:** `/api/budget-projections/`
 **Modèle Django:** `BudgetProjection`
 **Relations:**
-- Appartient à : `Account` (compte analysé)
-- Utilise : `DirectDebit[]`, `RecurringIncome[]` (pour les calculs)
+- Appartient à : `Account` (compte de référence)
+- Créé par : `User` (utilisateur créateur)
 
 **Champs principaux:**
 - `id` (integer, auto) : Identifiant unique
-- `compte_reference` (foreign key) : Compte analysé
-- `date_projection` (date) : Date de début de la projection
-- `periode_projection` (integer, 1-60) : Nombre de mois à projeter
-- `solde_initial` (decimal, auto) : Solde au moment de la création
-- `projections_data` (JSON, auto) : Données calculées de la projection
-
-**Logique métier complexe :**
-- Calculs automatiques intégrant prélèvements et revenus récurrents
-- Projections mensuelles avec évolution du solde
-- Analyses statistiques (solde min/max, mois en négatif, etc.)
-- Support de différents scénarios (optimiste, pessimiste, réaliste)
-- Contrainte unique : (compte_reference, date_projection, periode_projection)
-
-**Structure projections_data (JSON) :**
-```json
-{
-  "compte_id": integer,
-  "solde_initial": decimal,
-  "projections_mensuelles": [
-    {
-      "mois": integer,
-      "solde_debut": decimal,
-      "solde_fin": decimal,
-      "total_revenus": decimal,
-      "total_prelevements": decimal,
-      "transactions": [...]
-    }
-  ],
-  "resume": {
-    "revenus_totaux": decimal,
-    "solde_minimum": decimal,
-    "mois_solde_negatif": integer
-  }
-}
-```
+- `compte_reference` (foreign key) : Compte concerné
+- `date_projection` (date) : Date de la projection
+- `periode_projection` (integer) : Période en mois
+- `projections_data` (json) : Données calculées de la projection
+- `created_by` (foreign key) : Utilisateur créateur
+- `created_at/updated_at` (datetime) : Timestamps automatiques
 
 ### 📋 Routes CRUD Standard
 
@@ -790,10 +749,24 @@ Content-Type: application/json
 ```json
 {
   "compte_reference": "integer (optionnel)",
+  "date_projection": "date (optionnel)",
   "periode_projection": "integer (optionnel)",
-  "search": "string (optionnel)",
   "ordering": "string (date_projection, created_at)"
 }
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "compte_reference_username": "john_doe",
+    "date_projection": "2024-01-15",
+    "periode_projection": 6,
+    "solde_final_projete": 3250.75,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
 ```
 
 #### **POST** `/api/budget-projections/` - Créer une projection
@@ -801,21 +774,32 @@ Content-Type: application/json
 ```json
 {
   "compte_reference": 1,
-  "date_projection": "2024-02-01",
-  "periode_projection": 12
+  "date_projection": "2024-01-15",
+  "periode_projection": 6
 }
 ```
 
-**Response:** Projection créée avec calculs automatiques inclus
-
-#### **GET** `/api/budget-projections/{id}/` - Détail d'une projection
-**Response:** Projection complète avec toutes les données calculées
-
-#### **PUT/PATCH** `/api/budget-projections/{id}/` - Modifier une projection
-**Body:** Structure identique au POST
-
-#### **DELETE** `/api/budget-projections/{id}/` - Supprimer une projection
-**Response:** `204 No Content`
+**Response:**
+```json
+{
+  "id": 1,
+  "compte_reference": 1,
+  "compte_reference_username": "john_doe",
+  "date_projection": "2024-01-15",
+  "periode_projection": 6,
+  "projections_data": {
+    "solde_initial": 1250.75,
+    "solde_final_projete": 3250.75,
+    "evolution_mensuelle": [...],
+    "prélèvements_projetes": [...],
+    "revenus_projetes": [...]
+  },
+  "created_by": 1,
+  "created_by_username": "john_doe",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
 
 ### 🎯 Actions Personnalisées
 
@@ -824,266 +808,384 @@ Content-Type: application/json
 ```json
 {
   "compte_reference": 1,
-  "date_debut": "2024-02-01",
-  "periode_mois": 6,
-  "inclure_prelevements": true,
-  "inclure_revenus": true
+  "periode_projection": 6,
+  "date_debut": "2024-01-15"
 }
 ```
 
 **Response:**
 ```json
 {
-  "compte_id": 1,
-  "compte_nom": "Compte courant",
-  "solde_initial": 1250.75,
-  "solde_final_projete": 3500.25,
-  "variation_totale": 2249.50,
-  "date_debut": "2024-02-01",
-  "date_fin": "2024-08-01",
-  "periode_mois": 6,
-  "projections_mensuelles": [
-    {
-      "mois": 1,
-      "date_debut": "2024-02-01",
-      "date_fin": "2024-02-29",
-      "solde_debut": 1250.75,
-      "solde_fin": 1600.75,
-      "total_revenus": 2500.00,
-      "total_prelevements": 2150.00,
-      "variation": 350.00,
-      "transactions": [...]
-    }
-  ],
-  "resume": {
-    "revenus_totaux": 15000.00,
-    "prelevements_totaux": 12750.50,
-    "solde_minimum": 850.25,
-    "solde_maximum": 3500.25,
-    "mois_solde_negatif": 0
+  "projection": {
+    "solde_initial": 1250.75,
+    "solde_final_projete": 3250.75,
+    "evolution_mensuelle": [
+      {
+        "mois": "2024-01",
+        "solde_debut": 1250.75,
+        "solde_fin": 1450.75,
+        "variation": 200.00
+      }
+    ],
+    "prélèvements_projetes": [...],
+    "revenus_projetes": [...]
   }
 }
 ```
-
-#### **GET** `/api/budget-projections/summary/` - Résumé budgétaire
-**Query Parameters:**
-```json
-{
-  "compte_id": "integer (optionnel)"
-}
-```
-
-**Response:** Résumé complet ou par compte spécifique
 
 #### **GET** `/api/budget-projections/dashboard/` - Tableau de bord
+**Response:**
+```json
+{
+  "summary": {
+    "total_projection": 3250.75,
+    "projections_count": 3,
+    "periode_moyenne": 6
+  },
+  "recent_projections": [...],
+  "alerts": {
+    "projections_negatives": 1,
+    "projections_expirees": 0
+  }
+}
+```
+
+#### **GET** `/api/budget-projections/compare/` - Comparaison de scénarios
 **Query Parameters:**
 ```json
 {
-  "periode_mois": "integer (défaut: 3, max: 60)"
+  "projection_ids": "string (IDs séparés par des virgules)"
 }
 ```
 
 **Response:**
 ```json
 {
-  "user_id": 1,
-  "periode_projection": 3,
-  "indicateurs_cles": {
-    "solde_total_actuel": 5000.75,
-    "nombre_comptes": 3,
-    "revenus_mensuels_estimes": 3500.00,
-    "prelevements_mensuels_estimes": 2750.00,
-    "solde_mensuel_estime": 750.00,
-    "projection_3_mois": 7250.75
-  },
-  "activite_recente": {
-    "operations_7j": {...},
-    "operations_30j": {...},
-    "operations_90j": {...}
-  },
-  "repartition_comptes": [...],
-  "alertes": [...]
-}
-```
-
-#### **POST** `/api/budget-projections/quick_projection/` - Projection rapide
-**Body:**
-```json
-{
-  "compte_id": 1,
-  "mois": 3,
-  "scenario": "optimiste"
-}
-```
-
-#### **GET** `/api/budget-projections/compare_scenarios/` - Comparaison de scénarios
-**Query Parameters:**
-```json
-{
-  "compte_id": "integer",
-  "periode": "integer (défaut: 6)"
+  "comparison": [
+    {
+      "projection_id": 1,
+      "solde_final": 3250.75,
+      "variation": 2000.00
+    }
+  ]
 }
 ```
 
 ---
 
-## 🚫 Codes d'Erreur Communs
+## ⚙️ 6. AUTOMATED-TASKS (Tâches Automatiques) - **NOUVEAU**
 
-### 400 Bad Request
+**Entité de traçabilité** : Enregistre l'exécution des tâches automatiques (prélèvements, revenus).
+
+**Base route:** `/api/automated-tasks/`
+**Modèle Django:** `AutomatedTask`
+**Relations:**
+- Créé par : `User` (utilisateur déclencheur, peut être null pour tâches système)
+
+**Champs principaux:**
+- `id` (integer, auto) : Identifiant unique
+- `task_type` (string) : Type de tâche (PAYMENT_PROCESSING, INCOME_PROCESSING, etc.)
+- `execution_date` (datetime) : Date d'exécution
+- `status` (string) : Statut (SUCCESS, ERROR, PARTIAL)
+- `processed_count` (integer) : Nombre d'opérations traitées
+- `error_message` (text, optionnel) : Message d'erreur
+- `execution_duration` (decimal) : Durée d'exécution en secondes
+- `details` (json) : Détails de l'exécution
+- `created_by` (foreign key, optionnel) : Utilisateur déclencheur
+- `created_at/updated_at` (datetime) : Timestamps automatiques
+
+### 📋 Routes CRUD Standard
+
+#### **GET** `/api/automated-tasks/` - Liste des tâches (Lecture seule)
+**Query Parameters:**
 ```json
 {
-  "error": "Données invalides",
-  "details": {
-    "montant": ["Le montant ne peut pas être zéro."],
-    "description": ["La description ne peut pas être vide."]
+  "task_type": "string (optionnel)",
+  "status": "string (optionnel)",
+  "created_by": "integer (optionnel)",
+  "search": "string (recherche dans error_message)",
+  "ordering": "string (execution_date, processed_count, execution_duration)"
+}
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "task_type": "PAYMENT_PROCESSING",
+    "task_type_display": "Traitement des prélèvements",
+    "status": "SUCCESS",
+    "status_display": "Succès",
+    "processed_count": 3,
+    "execution_date": "2024-01-15T10:30:00Z",
+    "execution_date_formatted": "15/01/2024 10:30:00",
+    "execution_duration": "0.125",
+    "execution_duration_formatted": "0.125s",
+    "created_by_username": "john_doe",
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+### 🎯 Actions Personnalisées
+
+#### **GET** `/api/automated-tasks/statistics/` - Statistiques des tâches
+**Response:**
+```json
+{
+  "task_types": {
+    "PAYMENT_PROCESSING": {
+      "total": 25,
+      "success": 23,
+      "error": 2,
+      "success_rate": 92.0
+    },
+    "INCOME_PROCESSING": {
+      "total": 15,
+      "success": 15,
+      "error": 0,
+      "success_rate": 100.0
+    }
+  },
+  "status_stats": {
+    "SUCCESS": 38,
+    "ERROR": 2,
+    "PARTIAL": 0
+  },
+  "performance": {
+    "average_duration_seconds": 0.125,
+    "total_tasks": 40,
+    "total_processed_operations": 150
+  },
+  "recent_activity": {
+    "last_7_days_tasks": 8,
+    "last_7_days_processed": 25
   }
 }
 ```
 
-### 401 Unauthorized
+#### **GET** `/api/automated-tasks/recent/` - Tâches récentes (24h)
+**Response:**
 ```json
 {
-  "error": "Authentication credentials were not provided."
+  "count": 3,
+  "tasks": [
+    {
+      "id": 1,
+      "task_type_display": "Traitement des prélèvements",
+      "status_display": "Succès",
+      "processed_count": 2,
+      "execution_date_formatted": "15/01/2024 10:30:00",
+      "execution_duration": "0.125"
+    }
+  ]
 }
 ```
 
-### 403 Forbidden
+#### **GET** `/api/automated-tasks/errors/` - Tâches en erreur
+**Response:**
 ```json
 {
-  "error": "Vous ne pouvez pas accéder à ce compte"
+  "count": 2,
+  "tasks": [
+    {
+      "id": 5,
+      "task_type_display": "Traitement des prélèvements",
+      "status_display": "Erreur",
+      "error_message": "Compte insuffisamment approvisionné",
+      "execution_date_formatted": "15/01/2024 09:15:00"
+    }
+  ]
 }
 ```
 
-### 404 Not Found
+#### **GET** `/api/automated-tasks/summary/` - Résumé des tâches
+**Response:**
 ```json
 {
-  "error": "Compte non trouvé"
-}
-```
-
-### 500 Internal Server Error
-```json
-{
-  "error": "Erreur interne du serveur"
+  "today": {
+    "tasks_count": 5,
+    "processed_operations": 12
+  },
+  "this_week": {
+    "tasks_count": 25,
+    "processed_operations": 45
+  },
+  "this_month": {
+    "tasks_count": 95,
+    "processed_operations": 180
+  },
+  "total": {
+    "tasks_count": 150,
+    "processed_operations": 280
+  }
 }
 ```
 
 ---
 
-## 📝 Guide d'Implémentation pour LLM
+## 🔄 Système de Traitement Automatique
 
-### 🧠 Compréhension du Contexte Métier
+### Signaux Automatiques
 
-**Domaine :** Application de gestion financière personnelle
-**Objectif :** Permettre aux utilisateurs de suivre leurs finances, prévoir leurs budgets
-**Public :** Particuliers gérant leurs comptes bancaires et budgets familiaux
+L'API intègre un système de signaux Django qui déclenche automatiquement le traitement des prélèvements et revenus :
 
-**Workflow typique d'utilisation :**
-1. Créer un ou plusieurs comptes bancaires (`/accounts/`)
-2. Enregistrer des opérations financières (`/operations/`)
-3. Configurer des prélèvements automatiques (`/direct-debits/`)
-4. Définir des revenus récurrents (`/recurring-incomes/`)
-5. Générer des projections budgétaires (`/budget-projections/`)
+#### **Traitement des Prélèvements**
+- **Déclenchement** : Création ou modification d'un `DirectDebit`
+- **Condition** : `date_prelevement <= date.today()` et `actif = true`
+- **Action** : Création automatique d'une `Operation` de débit
+- **Mise à jour** : Solde du compte et prochaine date de prélèvement
+- **Traçabilité** : Enregistrement d'une `AutomatedTask`
 
-### 🔄 Logique de Mise à Jour Automatique
+#### **Traitement des Revenus**
+- **Déclenchement** : Création ou modification d'un `RecurringIncome`
+- **Condition** : `date_premier_versement <= date.today()` et `actif = true`
+- **Action** : Création automatique d'une `Operation` de crédit
+- **Mise à jour** : Solde du compte et prochaine date de versement
+- **Traçabilité** : Enregistrement d'une `AutomatedTask`
 
-**Cascade de mise à jour des soldes :**
-```
-Operation CREATE/UPDATE/DELETE → Account.solde mis à jour automatiquement
-DirectDebit (hérite Operation) → Même comportement
-```
+### Scripts de Gestion
 
-**Calculs en temps réel :**
-- Projections budgétaires recalculées à chaque demande
-- Statistiques agrégées dynamiquement
-- Conversions de fréquences automatiques (hebdo → mensuel, etc.)
+#### **Script Principal** : `manage_direct_debits.py`
+```bash
+# Traitement des prélèvements
+python manage_direct_debits.py --payments
 
-### 🎯 Patterns d'Usage Recommandés
+# Traitement des revenus
+python manage_direct_debits.py --incomes
 
-**Pour un LLM assistant :**
-
-1. **Consultation de données :**
-   - Toujours commencer par `/accounts/` pour le contexte utilisateur
-   - Utiliser `/statistics/` pour les résumés
-   - Préférer `/summary/` et `/dashboard/` pour les vues d'ensemble
-
-2. **Création de données :**
-   - Valider l'existence du compte avant créer operations/prélèvements/revenus
-   - Utiliser `/bulk_create/` pour les opérations multiples
-   - Les IDs sont auto-générés, ne jamais les spécifier en création
-
-3. **Recherche et filtrage :**
-   - Utiliser les query parameters pour filtrer (`?compte_reference=1`)
-   - `/search/` endpoints pour recherche textuelle
-   - `/by_account/` pour grouper par compte
-
-4. **Projections et analyses :**
-   - `/calculate/` pour projections temporaires (pas de sauvegarde)
-   - POST `/budget-projections/` pour sauvegarder des projections
-   - `/dashboard/` pour aperçu complet de la situation financière
-
-### ⚠️ Contraintes et Validations Critiques
-
-**Contraintes métier absolues :**
-- Les montants d'opération ne peuvent pas être zéro
-- Les soldes de compte ne peuvent pas être négatifs à la création
-- Les dates de prélèvement/échéance ne peuvent pas être dans le passé
-- Un utilisateur ne peut accéder qu'à ses propres données (sauf staff)
-
-**Validations automatiques :**
-- Cohérence des dates (date_fin >= date_debut)
-- Format des montants (decimal avec 2 décimales max)
-- Unicité des projections (compte + date + période)
-
-### 🏗️ Architecture Technique
-
-**Framework :** Django REST Framework avec ViewSets
-**Base de données :** PostgreSQL recommandé pour les calculs décimaux
-**Héritage :** DirectDebit hérite d'Operation (table unique avec discriminateur)
-**Permissions :** IsAuthenticated + filtrage par utilisateur dans get_queryset()
-
-**Endpoints standards par modèle :**
-- `GET /` : Liste (avec pagination)
-- `POST /` : Création
-- `GET /{id}/` : Détail
-- `PUT/PATCH /{id}/` : Modification
-- `DELETE /{id}/` : Suppression
-
-**Actions personnalisées :**
-- Pattern `@action(detail=True)` pour actions sur une instance
-- Pattern `@action(detail=False)` pour actions sur la collection
-- Suffixes courants : `/statistics/`, `/summary/`, `/active/`, `/upcoming/`
-
-### 📊 Données de Test et Exemples
-
-**Comptes typiques :**
-- Compte courant (solde quotidien)
-- Livret A (épargne)
-- Compte joint (famille)
-
-**Opérations courantes :**
-- Salaire : +2500€ mensuel
-- Loyer : -800€ mensuel  
-- Courses : -300€ mensuel (variable)
-- Essence : -200€ mensuel
-
-**Prélèvements automatiques :**
-- Abonnements : téléphone, internet, assurances
-- Crédits : immobilier, voiture
-- Utilities : électricité, gaz, eau
-
-### 🚀 Optimisations de Performance
-
-**Pour les LLMs :**
-- Utiliser les endpoints `/summary/` plutôt que récupérer toutes les données
-- Préférer les vues agrégées aux calculs côté client
-- Limiter les appels API avec les filtres appropriés
-- Utiliser `/dashboard/` pour les vues d'ensemble complètes
-
-**Gestion de la pagination :**
-```http
-GET /api/operations/?limit=50&offset=0
-GET /api/operations/?page=2  (si pagination par page activée)
+# Traitement complet
+python manage_direct_debits.py --both
 ```
 
-Cette documentation est optimisée pour qu'un LLM comprenne parfaitement le contexte métier, les relations entre entités, et puisse utiliser l'API de manière efficace et cohérente. 
+#### **Script de Test** : `test_automatic_operations.py`
+```bash
+# Tests des signaux automatiques
+python test_automatic_operations.py
+```
+
+#### **Génération de Données** : `generate_test_data.py`
+```bash
+# Génération de données de test
+python generate_test_data.py
+```
+
+---
+
+## 🧪 Tests et Qualité
+
+### Suite de Tests Automatisés
+
+L'API inclut une suite complète de tests couvrant :
+
+- **Tests Unitaires** : Modèles, serializers, validations
+- **Tests d'Intégration** : ViewSets, endpoints, flux complets
+- **Tests de Performance** : Temps de réponse, requêtes optimisées
+- **Tests de Sécurité** : Authentification, permissions, isolation des données
+
+### Outils de Test
+
+#### **Fichier de Configuration** : `pytest.ini`
+```ini
+[tool:pytest]
+DJANGO_SETTINGS_MODULE = core.settings
+python_files = tests.py test_*.py *_tests.py
+addopts = --reuse-db --nomigrations
+```
+
+#### **Script de Lancement** : `run_tests.py`
+```bash
+# Lancement des tests
+python run_tests.py
+
+# Tests avec couverture
+python run_tests.py --coverage
+```
+
+---
+
+## 📦 Dépendances et Installation
+
+### Requirements
+```
+Django==5.2.3
+djangorestframework==3.16.0
+django-filter==24.1
+PyJWT==2.10.1
+python-dateutil==2.9.0
+mysqlclient==2.2.7
+mimesis==13.1.0
+python-dotenv==1.1.1
+```
+
+### Installation
+```bash
+# Installation des dépendances
+pip install -r requirements.txt
+
+# Configuration de la base de données
+python manage.py migrate
+
+# Création d'un superuser
+python manage.py createsuperuser
+
+# Génération de données de test (optionnel)
+python generate_test_data.py
+```
+
+---
+
+## 🚀 Utilisation Avancée
+
+### Traitement Automatique en Production
+
+Pour un déploiement en production, il est recommandé de configurer un cron job pour le traitement automatique :
+
+```bash
+# Cron job pour le traitement quotidien (à 6h du matin)
+0 6 * * * /usr/bin/python /path/to/mes-frais/manage_direct_debits.py --both
+```
+
+### Monitoring et Alertes
+
+L'API fournit des endpoints de monitoring via les `AutomatedTask` :
+
+- **Statistiques de performance** : Durée moyenne d'exécution
+- **Taux de succès** : Pourcentage de tâches réussies
+- **Alertes d'erreur** : Tâches en échec avec messages détaillés
+- **Activité récente** : Tâches des dernières 24h/7 jours
+
+### Optimisations
+
+- **Requêtes optimisées** : Utilisation de `select_related` et `prefetch_related`
+- **Pagination** : Toutes les listes sont paginées
+- **Filtrage avancé** : Support de `django-filter`
+- **Recherche textuelle** : Recherche dans les descriptions
+- **Tri personnalisé** : Tri sur tous les champs pertinents
+
+---
+
+## 📝 Notes de Version
+
+### Version Actuelle : 2.0.0
+
+#### Nouvelles Fonctionnalités
+- ✅ **Système de tâches automatiques** : Traçabilité complète des traitements
+- ✅ **Signaux automatiques** : Traitement automatique des prélèvements et revenus
+- ✅ **Scripts de gestion** : Outils pour le traitement manuel et les tests
+- ✅ **Tests automatisés** : Suite de tests complète
+- ✅ **Génération de données** : Script pour créer des données de test
+- ✅ **Monitoring avancé** : Statistiques de performance et alertes
+
+#### Améliorations
+- 🔄 **Performance** : Optimisation des requêtes et de la pagination
+- 🔒 **Sécurité** : Validation renforcée et isolation des données
+- 📊 **Statistiques** : Endpoints de statistiques enrichis
+- 🧪 **Tests** : Couverture de tests étendue
+- 📚 **Documentation** : Documentation API complète et mise à jour
+
+#### Corrections
+- 🐛 **Validation** : Correction des validations de montants
+- 🐛 **Signaux** : Amélioration de la gestion des erreurs
+- 🐛 **Sérialisation** : Correction des formats de dates

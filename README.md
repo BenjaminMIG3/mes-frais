@@ -52,7 +52,14 @@ Aucun exemple de code n'est fourni volontairement ; le choix des bibliothèques,
 • Tableau de bord consolidé (solde total, alertes, prochaines échéances).  
 • Projection rapide (6 mois) & comparaison de scénarios.
 
-### 1.7 Interface utilisateur et expérience
+### 1.7 Tâches automatiques - **NOUVEAU**
+• **Historique des traitements** : Consultation de l'historique des tâches automatiques exécutées.
+• **Statistiques de performance** : Taux de succès, durée moyenne d'exécution, nombre d'opérations traitées.
+• **Monitoring en temps réel** : Alertes pour les tâches en erreur, activité récente (24h/7 jours).
+• **Tableau de bord opérationnel** : Vue d'ensemble des traitements automatiques (prélèvements, revenus).
+• **Gestion des erreurs** : Consultation des messages d'erreur et détails d'exécution.
+
+### 1.8 Interface utilisateur et expérience
 • **Gestion des thèmes** : Basculement entre mode sombre et mode clair avec persistance des préférences utilisateur.  
 • **Support multilingue** : Interface entièrement traduite via i18n (français par défaut, anglais recommandé).  
 • **Responsive design** : Adaptation optimale sur mobile, tablette et desktop.  
@@ -356,14 +363,13 @@ Créer | POST | **direct-debits/**
 Détail | GET | **direct-debits/{id}/**
 Mettre à jour | PUT/PATCH | **direct-debits/{id}/**
 Supprimer | DELETE | **direct-debits/{id}/**
-Actifs | GET | **direct-debits/active/**
-Expirés | GET | **direct-debits/expired/**
-À venir (30 j) | GET | **direct-debits/upcoming/**
-Statistiques | GET | **direct-debits/statistics/**
-Vue par compte | GET | **direct-debits/by_account/**
+Prélèvements actifs | GET | **direct-debits/active/**
+Prélèvements expirés | GET | **direct-debits/expired/**
+Prélèvements à venir | GET | **direct-debits/upcoming/**
 Prolonger échéance | POST | **direct-debits/{id}/extend/**
-Mise à jour groupée | POST | **direct-debits/bulk_update_status/**
-Résumé global | GET | **direct-debits/summary/**
+Mise à jour groupée | POST | **direct-debits/bulk_status/**
+Statistiques | GET | **direct-debits/statistics/**
+Tableau de bord | GET | **direct-debits/dashboard/**
 
 ### 3.5 Revenus récurrents (`recurring-incomes`)
 Opération | Méthode | Chemin
@@ -373,13 +379,12 @@ Créer | POST | **recurring-incomes/**
 Détail | GET | **recurring-incomes/{id}/**
 Mettre à jour | PUT/PATCH | **recurring-incomes/{id}/**
 Supprimer | DELETE | **recurring-incomes/{id}/**
-Statistiques | GET | **recurring-incomes/statistics/**
-Vue par compte | GET | **recurring-incomes/by_account/**
-Actifs | GET | **recurring-incomes/active/**
-À venir | GET | **recurring-incomes/upcoming/**
-Projections | GET | **recurring-incomes/projections/**
-Activation/Désactivation | POST | **recurring-incomes/{id}/toggle_active/**
+Revenus actifs | GET | **recurring-incomes/active/**
+Revenus à venir | GET | **recurring-incomes/upcoming/**
 Création en lot | POST | **recurring-incomes/bulk_create/**
+Activer/Désactiver | POST | **recurring-incomes/{id}/toggle/**
+Statistiques | GET | **recurring-incomes/statistics/**
+Projections futures | GET | **recurring-incomes/projections/**
 
 ### 3.6 Projections budgétaires (`budget-projections`)
 Opération | Méthode | Chemin
@@ -389,1099 +394,333 @@ Créer | POST | **budget-projections/**
 Détail | GET | **budget-projections/{id}/**
 Mettre à jour | PUT/PATCH | **budget-projections/{id}/**
 Supprimer | DELETE | **budget-projections/{id}/**
-Calcul instantané | POST | **budget-projections/calculate/**
-Résumé | GET | **budget-projections/summary/**
-Dashboard | GET | **budget-projections/dashboard/**
-Projection rapide (6 mois) | POST | **budget-projections/quick_projection/**
-Comparaison de scénarios | GET | **budget-projections/compare_scenarios/**
+Calcul temps réel | POST | **budget-projections/calculate/**
+Tableau de bord | GET | **budget-projections/dashboard/**
+Comparaison scénarios | GET | **budget-projections/compare/**
 
-### 3.7 Authentification et gestion des tokens
+### 3.7 Tâches automatiques (`automated-tasks`) - **NOUVEAU**
+Opération | Méthode | Chemin
+--- | --- | ---
+Lister (lecture seule) | GET | **automated-tasks/**
+Statistiques | GET | **automated-tasks/statistics/**
+Tâches récentes (24h) | GET | **automated-tasks/recent/**
+Tâches en erreur | GET | **automated-tasks/errors/**
+Résumé | GET | **automated-tasks/summary/**
 
-#### 3.7.1 Architecture d'authentification
+#### 3.7.1 Structure détaillée des réponses - Tâches automatiques
 
-L'API utilise un système d'authentification JWT (JSON Web Tokens) personnalisé avec deux types de tokens :
+##### **GET /api/v1/automated-tasks/** - Liste des tâches automatiques
 
-- **Access Token** : Durée de vie de 1 heure, utilisé pour les requêtes API
-- **Refresh Token** : Durée de vie de 7 jours, utilisé pour renouveler l'access token
-
-#### 3.7.2 Endpoints d'authentification détaillés
-
-##### **POST /api/v1/auth/login/**
-**Connexion utilisateur**
-
-**Note :** Le champ `username` correspond au nom d'utilisateur (qui peut être différent de l'email). L'email est un champ séparé.
-
-**Corps de la requête :**
+**Format de réponse standard (AutomatedTaskListSerializer) :**
 ```json
-{
-  "username": "nom_utilisateur",
-  "password": "motdepasse123"
-}
-```
-
-**Réponse réussie (200) :**
-```json
-{
-  "message": "Connexion réussie",
-  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-  "user": {
+[
+  {
     "id": 1,
-    "username": "nom_utilisateur",
-    "email": "user@example.com"
+    "task_type": "PAYMENT_PROCESSING",
+    "task_type_display": "Traitement des prélèvements",
+    "status": "SUCCESS",
+    "status_display": "Succès",
+    "processed_count": 3,
+    "execution_date": "2024-01-15T10:30:00Z",
+    "execution_date_formatted": "15/01/2024 10:30:00",
+    "execution_duration": "0.125",
+    "execution_duration_formatted": "0.125s",
+    "created_by_username": "john_doe",
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+**Détails des champs :**
+
+| Champ | Type | Description |
+|-------|------|-------------|
+| `id` | Integer | Identifiant unique de la tâche |
+| `task_type` | String | Type de tâche (PAYMENT_PROCESSING, INCOME_PROCESSING, etc.) |
+| `task_type_display` | String | Libellé lisible du type de tâche |
+| `status` | String | Statut (SUCCESS, ERROR, PARTIAL) |
+| `status_display` | String | Libellé lisible du statut |
+| `processed_count` | Integer | Nombre d'opérations traitées |
+| `execution_date` | String (ISO DateTime) | Date et heure d'exécution |
+| `execution_date_formatted` | String | Date formatée pour l'affichage |
+| `execution_duration` | String (Decimal) | Durée d'exécution en secondes |
+| `execution_duration_formatted` | String | Durée formatée pour l'affichage |
+| `created_by_username` | String | Nom d'utilisateur déclencheur |
+| `created_at` | String (ISO DateTime) | Date et heure de création |
+
+**Paramètres de requête disponibles :**
+```json
+{
+  "task_type": "string (optionnel) - Filtrer par type de tâche",
+  "status": "string (optionnel) - Filtrer par statut",
+  "created_by": "integer (optionnel) - Filtrer par utilisateur déclencheur",
+  "search": "string (optionnel) - Recherche dans les messages d'erreur",
+  "ordering": "string (optionnel) - Tri (execution_date, processed_count, execution_duration)"
+}
+```
+
+##### **GET /api/v1/automated-tasks/statistics/** - Statistiques des tâches
+
+```json
+{
+  "task_types": {
+    "PAYMENT_PROCESSING": {
+      "total": 25,
+      "success": 23,
+      "error": 2,
+      "success_rate": 92.0
+    },
+    "INCOME_PROCESSING": {
+      "total": 15,
+      "success": 15,
+      "error": 0,
+      "success_rate": 100.0
+    }
+  },
+  "status_stats": {
+    "SUCCESS": 38,
+    "ERROR": 2,
+    "PARTIAL": 0
+  },
+  "performance": {
+    "average_duration_seconds": 0.125,
+    "total_tasks": 40,
+    "total_processed_operations": 150
+  },
+  "recent_activity": {
+    "last_7_days_tasks": 8,
+    "last_7_days_processed": 25
   }
 }
 ```
 
-**Erreurs possibles :**
-- `400` : Données invalides ou email mal formaté
-- `401` : Identifiants incorrects
+##### **GET /api/v1/automated-tasks/recent/** - Tâches récentes (24h)
 
-##### **POST /api/v1/auth/register/**
-**Inscription d'un nouvel utilisateur**
-
-**Corps de la requête :**
 ```json
 {
-  "username": "nouvel_utilisateur",
-  "password": "motdepasse123",
-  "email": "nouveau@example.com"
+  "count": 3,
+  "tasks": [
+    {
+      "id": 1,
+      "task_type_display": "Traitement des prélèvements",
+      "status_display": "Succès",
+      "processed_count": 2,
+      "execution_date_formatted": "15/01/2024 10:30:00",
+      "execution_duration": "0.125"
+    }
+  ]
 }
 ```
 
-**Réponse réussie (201) :**
+##### **GET /api/v1/automated-tasks/errors/** - Tâches en erreur
+
 ```json
 {
-  "message": "Inscription réussie",
-  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-  "user": {
-    "id": 2,
-    "username": "nouvel_utilisateur",
-    "email": "nouveau@example.com"
+  "count": 2,
+  "tasks": [
+    {
+      "id": 5,
+      "task_type_display": "Traitement des prélèvements",
+      "status_display": "Erreur",
+      "error_message": "Compte insuffisamment approvisionné",
+      "execution_date_formatted": "15/01/2024 09:15:00"
+    }
+  ]
+}
+```
+
+##### **GET /api/v1/automated-tasks/summary/** - Résumé des tâches
+
+```json
+{
+  "today": {
+    "tasks_count": 5,
+    "processed_operations": 12
+  },
+  "this_week": {
+    "tasks_count": 25,
+    "processed_operations": 45
+  },
+  "this_month": {
+    "tasks_count": 95,
+    "processed_operations": 180
+  },
+  "total": {
+    "tasks_count": 150,
+    "processed_operations": 280
   }
 }
 ```
-
-**Erreurs possibles :**
-- `400` : Champs manquants
-- `409` : Username ou email déjà utilisé
-
-##### **POST /api/v1/auth/refresh_token/**
-**Rafraîchissement du token d'accès**
-
-**Corps de la requête :**
-```json
-{
-  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
-}
-```
-
-**Réponse réussie (200) :**
-```json
-{
-  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-  "message": "Token rafraîchi avec succès"
-}
-```
-
-**Erreurs possibles :**
-- `400` : Refresh token manquant
-- `401` : Refresh token invalide ou expiré
-
-##### **POST /api/v1/auth/logout/**
-**Déconnexion utilisateur**
-
-**Réponse réussie (200) :**
-```json
-{
-  "message": "Déconnexion réussie"
-}
-```
-
-##### **GET /api/v1/auth/profile/**
-**Récupération du profil utilisateur (protégé)**
-
-**En-têtes requis :**
-```
-Authorization: Bearer <access_token>
-```
-
-**Réponse réussie (200) :**
-```json
-{
-  "user": {
-    "id": 1,
-    "username": "nom_utilisateur",
-    "email": "user@example.com",
-    "first_name": "Prénom",
-    "last_name": "Nom",
-    "date_joined": "2024-01-15T10:30:00Z"
-  }
-}
-```
-
-#### 3.7.3 Structure des tokens JWT
-
-##### **Access Token Payload :**
-```json
-{
-  "user_id": 1,
-  "username": "user@example.com",
-  "exp": 1705312800,
-  "iat": 1705309200,
-  "type": "access",
-  "jti": "1705309200000000"
-}
-```
-
-##### **Refresh Token Payload :**
-```json
-{
-  "user_id": 1,
-  "exp": 1705914000,
-  "iat": 1705309200,
-  "type": "refresh",
-  "jti": "1705309200000001"
-}
-```
-
-#### 3.7.4 Gestion des erreurs d'authentification
-
-##### **Codes d'erreur HTTP :**
-- `401 Unauthorized` : Token manquant, invalide ou expiré
-- `403 Forbidden` : Permissions insuffisantes
-- `400 Bad Request` : Données de requête invalides
-
-##### **Messages d'erreur typiques :**
-```json
-{
-  "detail": "Token expiré"
-}
-```
-```json
-{
-  "detail": "Token invalide"
-}
-```
-```json
-{
-  "detail": "Utilisateur non trouvé"
-}
-```
-
-#### 3.7.5 Sécurité et bonnes pratiques
-
-##### **Côté client (React Native) :**
-- Stockage sécurisé des tokens (Keychain iOS, Keystore Android)
-- Rafraîchissement automatique avant expiration
-- Gestion des erreurs 401 avec redirection vers login
-- Nettoyage des tokens lors de la déconnexion
-
-##### **Côté serveur :**
-- Tokens signés avec `SECRET_KEY` Django
-- Algorithmes de chiffrement : HS256
-- Validation stricte des types de tokens
-- Gestion des exceptions d'authentification
-
-##### **Recommandations de sécurité :**
-- Utilisation de HTTPS en production
-- Rotation régulière des clés secrètes
-- Monitoring des tentatives d'authentification
-- Implémentation d'une blacklist de tokens (optionnel)
 
 ---
 
-## 4. Structures des modèles
+## 4. Système de traitement automatique
 
-### 4.1 Modèle de base (BaseModel)
-Tous les modèles héritent de cette classe abstraite qui fournit les champs de traçabilité :
+### 4.1 Signaux automatiques
 
-```json
-{
-  "created_by": "integer (User ID)",
-  "created_at": "datetime (auto)",
-  "updated_at": "datetime (auto)"
-}
-```
+L'API intègre un système de signaux Django qui déclenche automatiquement le traitement des prélèvements et revenus :
 
-### 4.2 Account (Compte bancaire)
-```json
-{
-  "id": "integer (auto)",
-  "user": "integer (User ID)",
-  "nom": "string (max 100 chars, default: 'Compte bancaire')",
-  "solde": "decimal (20,2, default: 0.00)",
-  "created_by": "integer (User ID)",
-  "created_at": "datetime",
-  "updated_at": "datetime"
-}
-```
+#### **Traitement des prélèvements**
+- **Déclenchement** : Création ou modification d'un prélèvement automatique
+- **Condition** : Date de prélèvement ≤ date actuelle ET prélèvement actif
+- **Action** : Création automatique d'une opération de débit
+- **Mise à jour** : Solde du compte et prochaine date de prélèvement
+- **Traçabilité** : Enregistrement d'une tâche automatique
 
-### 4.3 Operation (Opération financière)
-```json
-{
-  "id": "integer (auto)",
-  "compte_reference": "integer (Account ID)",
-  "montant": "decimal (20,2)",
-  "description": "string (max 255 chars)",
-  "date_operation": "date (auto)",
-  "created_by": "integer (User ID)",
-  "created_at": "datetime",
-  "updated_at": "datetime"
-}
-```
+#### **Traitement des revenus**
+- **Déclenchement** : Création ou modification d'un revenu récurrent
+- **Condition** : Date de premier versement ≤ date actuelle ET revenu actif
+- **Action** : Création automatique d'une opération de crédit
+- **Mise à jour** : Solde du compte et prochaine date de versement
+- **Traçabilité** : Enregistrement d'une tâche automatique
 
-### 4.4 DirectDebit (Prélèvement automatique)
-Hérite de `Operation` et ajoute les champs suivants :
+### 4.2 Types de tâches automatiques
 
-```json
-{
-  "id": "integer (auto)",
-  "compte_reference": "integer (Account ID)",
-  "montant": "decimal (20,2)",
-  "description": "string (max 255 chars)",
-  "date_operation": "date (auto)",
-  "date_prelevement": "date",
-  "echeance": "date (nullable)",
-  "frequence": "string (choices: 'Mensuel', 'Trimestriel', 'Annuel', default: 'Mensuel')",
-  "actif": "boolean (default: true)",
-  "created_by": "integer (User ID)",
-  "created_at": "datetime",
-  "updated_at": "datetime"
-}
-```
+| Type | Description | Déclenchement |
+|------|-------------|---------------|
+| `PAYMENT_PROCESSING` | Traitement des prélèvements | Création/modification de DirectDebit |
+| `INCOME_PROCESSING` | Traitement des revenus | Création/modification de RecurringIncome |
+| `BOTH_PROCESSING` | Traitement complet | Script de gestion manuel |
+| `MANUAL_EXECUTION` | Exécution manuelle | Action utilisateur |
+| `AUTO_TRIGGER` | Déclenchement automatique | Système automatique |
 
-### 4.5 RecurringIncome (Revenu récurrent)
-```json
-{
-  "id": "integer (auto)",
-  "compte_reference": "integer (Account ID)",
-  "montant": "decimal (20,2)",
-  "description": "string (max 255 chars)",
-  "date_premier_versement": "date",
-  "date_fin": "date (nullable)",
-  "frequence": "string (choices: 'Hebdomadaire', 'Mensuel', 'Trimestriel', 'Annuel', default: 'Mensuel')",
-  "actif": "boolean (default: true)",
-  "type_revenu": "string (choices: 'Salaire', 'Subvention', 'Aide', 'Pension', 'Loyer', 'Autre', default: 'Salaire')",
-  "created_by": "integer (User ID)",
-  "created_at": "datetime",
-  "updated_at": "datetime"
-}
-```
+### 4.3 Statuts des tâches
 
-### 4.6 BudgetProjection (Projection budgétaire)
-```json
-{
-  "id": "integer (auto)",
-  "compte_reference": "integer (Account ID)",
-  "date_projection": "date",
-  "periode_projection": "integer (nombre de mois)",
-  "solde_initial": "decimal (20,2)",
-  "projections_data": "json (données des projections)",
-  "created_by": "integer (User ID)",
-  "created_at": "datetime",
-  "updated_at": "datetime"
-}
-```
-
-### 4.7 Contraintes et relations
-
-**Contraintes d'unicité :**
-- `BudgetProjection` : combinaison unique de `compte_reference`, `date_projection` et `periode_projection`
-
-**Relations :**
-- `Account` → `User` (Many-to-One)
-- `Operation` → `Account` (Many-to-One)
-- `DirectDebit` → `Account` (Many-to-One, hérite de `Operation`)
-- `RecurringIncome` → `Account` (Many-to-One)
-- `BudgetProjection` → `Account` (Many-to-One)
-
-**Méthodes spéciales :**
-- `DirectDebit.get_next_occurrence()` : calcule la prochaine occurrence
-- `DirectDebit.get_occurrences_until()` : génère toutes les occurrences jusqu'à une date
-- `RecurringIncome.get_next_occurrence()` : calcule la prochaine occurrence
-- `RecurringIncome.get_occurrences_until()` : génère toutes les occurrences jusqu'à une date
+| Statut | Description |
+|--------|-------------|
+| `SUCCESS` | Tâche exécutée avec succès |
+| `ERROR` | Erreur lors de l'exécution |
+| `PARTIAL` | Exécution partielle (certaines opérations échouées) |
 
 ---
 
-## 5. Considérations supplémentaires
-• Toutes les routes protégées nécessitent un **token d'accès JWT** dans l'en-tête `Authorization: Bearer <token>`.
+## 5. Gestion des erreurs
 
-• Les méthodes GET supportent la pagination, le filtrage, la recherche et l'ordering via les paramètres standards de Django REST Framework (page, page_size, search, ordering, etc.).
+### 5.1 Codes de réponse HTTP
 
-• Les formats de dates attendus sont au standard ISO 8601 (`YYYY-MM-DD`).
+| Code | Description | Utilisation |
+|------|-------------|-------------|
+| 200 | Succès | GET, PUT, PATCH |
+| 201 | Créé | POST |
+| 204 | Succès sans contenu | DELETE |
+| 400 | Erreur de validation | Données invalides |
+| 401 | Non authentifié | Token manquant/invalide |
+| 403 | Accès interdit | Permissions insuffisantes |
+| 404 | Ressource non trouvée | ID inexistant |
+| 500 | Erreur serveur | Erreur interne |
 
-• Les montants sont exprimés en **euros** dans l'API.
+### 5.2 Format des erreurs
 
-### 5.1 Exigences techniques d'interface
-
-#### **Gestion des thèmes**
-- **Implémentation** : Utilisation d'un système de thèmes CSS variables ou d'un provider de thème (React Context, Redux, etc.)
-- **Persistance** : Sauvegarde de la préférence dans le stockage local de l'appareil
-- **Thèmes requis** :
-  - **Mode clair** : Fond blanc, texte noir, couleurs d'accent modernes
-  - **Mode sombre** : Fond sombre (#121212), texte clair, couleurs d'accent adaptées
-- **Transition** : Animation fluide lors du basculement (300-500ms)
-- **Cohérence** : Application du thème sur tous les écrans et composants
-
-#### **Support multilingue (i18n)**
-- **Framework recommandé** : React i18next ou équivalent
-- **Langues prioritaires** :
-  - Français (fr) - langue par défaut
-  - Anglais (en) - langue secondaire
-- **Détection automatique** : Utilisation de la langue système de l'appareil
-- **Fallback** : Retour automatique au français si traduction manquante
-- **Format des dates** : Adaptation selon la locale (DD/MM/YYYY pour FR, MM/DD/YYYY pour EN)
-- **Format des montants** : Adaptation des séparateurs décimaux selon la locale
-- **Direction du texte** : Support RTL pour futures langues
-
-#### **Responsive Design**
-- **Breakpoints recommandés** :
-  - Mobile : < 768px
-  - Tablette : 768px - 1024px
-  - Desktop : > 1024px
-- **Navigation** : Adaptation du menu selon la taille d'écran
-- **Tableaux** : Scroll horizontal ou vue adaptée sur mobile
-- **Formulaires** : Champs empilés sur mobile, disposition en colonnes sur desktop
-
-#### **Accessibilité (WCAG 2.1 AA)**
-- **Contraste** : Ratio minimum de 4.5:1 pour le texte normal
-- **Navigation clavier** : Support complet de la navigation au clavier
-- **Lecteurs d'écran** : Labels appropriés et structure sémantique
-- **Taille de texte** : Support du zoom jusqu'à 200%
-- **Couleurs** : Pas d'information véhiculée uniquement par la couleur
-
-Ce document sera mis à jour au fur et à mesure des évolutions de l'API.
+```json
+{
+  "error": "Message d'erreur principal",
+  "details": {
+    "field_name": ["Message d'erreur spécifique"]
+  },
+  "code": "ERROR_CODE_OPTIONNEL"
+}
+```
 
 ---
 
-## 6. Endpoints de statistiques pour Dashboard
+## 6. Authentification et sécurité
 
-### 6.1 Vue d'ensemble des comptes
+### 6.1 Headers requis
 
-#### **GET /api/v1/accounts/summary/**
-**Résumé basique des comptes de l'utilisateur**
-
-**Réponse :**
-```json
-{
-  "total_comptes": 3,
-  "total_solde": 42488.44,
-  "comptes_negatifs": 0,
-  "comptes_positifs": 3
-}
+```http
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
 ```
 
-#### **GET /api/v1/accounts/global_overview/**
-**Vue d'ensemble complète des comptes pour dashboard principal**
+### 6.2 Gestion des tokens
 
-**Réponse :**
-```json
-{
-  "resume": {
-    "total_comptes": 3,
-    "total_solde": 42488.44,
-    "solde_moyen": 14162.81,
-    "solde_maximum": 19944.49,
-    "solde_minimum": 10610.55,
-    "comptes_positifs": 3,
-    "comptes_negatifs": 0,
-    "total_operations": 87,
-    "derniere_activite_globale": "2025-06-25T12:17:56.540252+00:00"
-  },
-  "repartition": {
-    "excellent": 3,
-    "bon": 0,
-    "attention": 0,
-    "critique": 0
-  },
-  "comptes": [
-    {
-      "id": 52,
-      "nom": "PEL Banque Populaire",
-      "solde": 19944.49,
-      "status": "positif",
-      "status_niveau": "excellent",
-      "total_operations": 29,
-      "operations_30j": 29,
-      "variation_30j": 18944.49,
-      "derniere_activite": "2025-06-25T12:17:56.540252+00:00",
-      "prelevements_actifs": 2,
-      "revenus_actifs": 1,
-      "created_at": "2025-06-25T12:17:55.675585+00:00"
-    }
-  ],
-  "alertes": {
-    "comptes_critiques": 0,
-    "comptes_attention": 0,
-    "comptes_inactifs": 0,
-    "necessite_attention": false
-  }
-}
+- **Access Token** : Valide 1 heure
+- **Refresh Token** : Valide 7 jours
+- **Renouvellement automatique** : Via `/auth/refresh_token/`
+
+### 6.3 Isolation des données
+
+- Chaque utilisateur accède uniquement à ses propres données
+- Filtrage automatique par utilisateur connecté
+- Permissions staff pour accès global (administration)
+
+---
+
+## 7. Optimisations et bonnes pratiques
+
+### 7.1 Pagination
+
+Toutes les listes sont paginées par défaut :
+```http
+GET /api/v1/operations/?page=1&page_size=20
 ```
 
-### 6.2 Dashboard complet (recommandé)
+### 7.2 Filtrage et recherche
 
-#### **GET /api/v1/budget-projections/dashboard/**
-**Tableau de bord complet avec toutes les métriques**
-
-**Paramètres de requête optionnels :**
-- `periode_mois` : Nombre de mois pour la projection (défaut: 3, max: 60)
-
-**Réponse :**
-```json
-{
-  "overview": {
-    "comptes_count": 3,
-    "solde_total": 42488.44,
-    "revenus_mensuels": 5884.07,
-    "prelevements_mensuels": 856.33,
-    "solde_mensuel_estime": 5027.74,
-    "status": "positif",
-    "sante_financiere": "excellente"
-  },
-  "activite_recente": {
-    "operations_7j": {
-      "count": 87,
-      "montant_total": 41488.44,
-      "montant_positif": 48260.32,
-      "montant_negatif": -6771.88
-    },
-    "operations_30j": { /* même structure */ },
-    "operations_90j": { /* même structure */ }
-  },
-  "comptes": [
-    {
-      "id": 52,
-      "nom": "PEL Banque Populaire",
-      "solde": 19944.49,
-      "nombre_operations": 29,
-      "derniere_activite": "2025-06-25T12:17:56.540252+00:00",
-      "status": "positif"
-    }
-  ],
-  "alertes": {
-    "niveau_urgence": "normal",
-    "comptes_en_alerte": 0,
-    "comptes_details": [],
-    "messages_urgents": [],
-    "prelevements_urgents": 0
-  },
-  "prochaines_echeances": {
-    "prelevements_30j": {
-      "count": 2,
-      "montant_total": 856.33,
-      "details": [
-        {
-          "id": 1,
-          "description": "Électricité EDF",
-          "montant": 85.50,
-          "date": "2025-07-15",
-          "jours_restants": 20,
-          "compte": "Compte Courant",
-          "frequence": "Mensuel",
-          "type": "prelevement"
-        }
-      ]
-    },
-    "revenus_30j": {
-      "count": 1,
-      "montant_total": 2500.00,
-      "details": [
-        {
-          "id": 1,
-          "description": "Salaire Net",
-          "type_revenu": "Salaire",
-          "montant": 2500.00,
-          "date": "2025-07-01",
-          "jours_restants": 6,
-          "compte": "Compte Courant",
-          "frequence": "Mensuel",
-          "type": "revenu"
-        }
-      ]
-    }
-  },
-  "projections": {
-    "periode_mois": 3,
-    "tendance_mois": [
-      {
-        "mois": 1,
-        "solde_projete": 47516.18,
-        "variation": 5027.74
-      },
-      {
-        "mois": 2,
-        "solde_projete": 52543.92,
-        "variation": 5027.74
-      },
-      {
-        "mois": 3,
-        "solde_projete": 57571.66,
-        "variation": 5027.74
-      }
-    ],
-    "capacite_epargne_mensuelle": 5027.74,
-    "mois_avant_deficit": null
-  },
-  "metriques": {
-    "ratio_revenus_prelevements": 6.87,
-    "couverture_solde_mois": 49.64,
-    "total_operations_mois": 87,
-    "moyenne_operation": 476.98
-  }
-}
+Utilisation des paramètres de requête pour optimiser les performances :
+```http
+GET /api/v1/operations/?compte_reference=1&search=salaire&ordering=-created_at
 ```
 
-### 6.3 Statistiques par module
+### 7.3 Cache et performance
 
-#### **GET /api/v1/operations/statistics/**
-**Statistiques détaillées des opérations**
+- **Cache local** : Mise en cache des données fréquemment consultées
+- **Requêtes optimisées** : Utilisation des endpoints de statistiques plutôt que de calculs côté client
+- **Lazy loading** : Chargement à la demande des données détaillées
 
-```json
-{
-  "statistics": {
-    "total_operations": 87,
-    "total_montant": 41488.44,
-    "operations_30_jours": 87,
-    "montant_30_jours": 41488.44,
-    "operations_7_jours": 87,
-    "montant_7_jours": 41488.44,
-    "operations_positives": 58,
-    "montant_positif": 48260.32,
-    "operations_negatives": 29,
-    "montant_negatif": -6771.88
-  }
-}
-```
+### 7.4 Gestion hors ligne
 
-#### **GET /api/v1/direct-debits/statistics/**
-**Statistiques des prélèvements automatiques**
+- **Cache local** : Stockage des données essentielles
+- **Synchronisation** : Mise à jour lors du retour en ligne
+- **Validation locale** : Vérification des données avant envoi
 
-```json
-{
-  "statistics": {
-    "total_prélèvements": 7,
-    "total_montant": 2569.00,
-    "prélèvements_actifs": 7,
-    "montant_actifs": 2569.00,
-    "prélèvements_expirés": 0,
-    "montant_expirés": 0.00,
-    "prélèvements_ce_mois": 0,
-    "montant_ce_mois": 0.00
-  }
-}
-```
+---
 
-#### **GET /api/v1/recurring-incomes/statistics/**
-**Statistiques des revenus récurrents**
+## 8. Tests et développement
 
-```json
-{
-  "statistics": {
-    "total_revenus": 4,
-    "revenus_actifs": 4,
-    "montant_mensuel_equivalent": 5884.07,
-    "montant_annuel_equivalent": 70608.84,
-    "par_type": {
-      "Salaire": {"count": 2, "montant_total": 7218.41},
-      "Subvention": {"count": 1, "montant_total": 205.68},
-      "Aide": {"count": 1, "montant_total": 487.47},
-      "Pension": {"count": 0, "montant_total": 0},
-      "Loyer": {"count": 0, "montant_total": 0},
-      "Autre": {"count": 0, "montant_total": 0}
-    },
-    "par_frequence": {
-      "Hebdomadaire": 0,
-      "Mensuel": 4,
-      "Trimestriel": 0,
-      "Annuel": 0
-    }
-  }
-}
-```
+### 8.1 Environnement de test
 
-### 6.4 Projections et analyses détaillées
+- **Base URL de test** : `/api/v1/`
+- **Données de test** : Génération automatique via scripts
+- **Tests automatisés** : Suite complète de tests unitaires et d'intégration
 
-#### **POST /api/v1/budget-projections/calculate/**
-**Calcul de projection complète en temps réel (sans sauvegarde)**
+### 8.2 Outils de développement
 
-**Description :** Cet endpoint permet de calculer des projections budgétaires détaillées avec toutes les données mensuelles. Il est idéal pour l'analyse approfondie et les graphiques.
+- **Documentation interactive** : Endpoints documentés avec exemples
+- **Logs détaillés** : Traçabilité complète des opérations
+- **Monitoring** : Statistiques de performance et alertes
 
-**Corps de la requête :**
-```json
-{
-  "compte_reference": 52,
-  "date_debut": "2025-01-01",
-  "periode_mois": 6,
-  "inclure_prelevements": true,
-  "inclure_revenus": true
-}
-```
+---
 
-**Paramètres :**
-- `compte_reference` : ID du compte (requis)
-- `date_debut` : Date de début de la projection (optionnel, défaut: aujourd'hui)
-- `periode_mois` : Nombre de mois à projeter (optionnel, défaut: 12, max: 60)
-- `inclure_prelevements` : Inclure les prélèvements automatiques (optionnel, défaut: true)
-- `inclure_revenus` : Inclure les revenus récurrents (optionnel, défaut: true)
+## 9. Déploiement et production
 
-**Réponse complète :**
-```json
-{
-  "compte_id": 52,
-  "compte_nom": "PEL Banque Populaire",
-  "solde_initial": 19944.49,
-  "solde_final_projete": 50110.93,
-  "variation_totale": 30166.44,
-  "date_debut": "2025-01-01",
-  "date_fin": "2025-07-01",
-  "periode_mois": 6,
-  "projections_mensuelles": [
-    {
-      "mois": 1,
-      "date_debut": "2025-01-01",
-      "date_fin": "2025-01-31",
-      "solde_debut": 19944.49,
-      "solde_fin": 22644.49,
-      "total_revenus": 3200.00,
-      "total_prelevements": 500.00,
-      "variation": 2700.00,
-      "transactions": [
-        {
-          "date": "2025-01-01",
-          "montant": 2500.00,
-          "description": "Salaire Net",
-          "type": "revenu"
-        },
-        {
-          "date": "2025-01-15",
-          "montant": -85.50,
-          "description": "Électricité EDF",
-          "type": "prelevement"
-        }
-      ]
-    },
-    {
-      "mois": 2,
-      "date_debut": "2025-02-01",
-      "date_fin": "2025-02-28",
-      "solde_debut": 22644.49,
-      "solde_fin": 25344.49,
-      "total_revenus": 3200.00,
-      "total_prelevements": 500.00,
-      "variation": 2700.00,
-      "transactions": [...]
-    }
-  ],
-  "resume": {
-    "revenus_totaux": 19200.00,
-    "prelevements_totaux": 3000.00,
-    "solde_minimum": 19944.49,
-    "solde_maximum": 50110.93,
-    "mois_solde_negatif": 0
-  }
-}
-```
+### 9.1 Configuration recommandée
 
-**💡 Comment utiliser ces données :**
+- **Base de données** : PostgreSQL pour la précision financière
+- **Cache** : Redis pour les sessions et données temporaires
+- **Monitoring** : Logs structurés et métriques de performance
 
-##### **Pour un graphique d'évolution du solde :**
-```javascript
-// Extraire les données pour un graphique
-const chartData = response.projections_mensuelles.map(mois => ({
-  periode: `${mois.date_debut.substring(0,7)}`, // "2025-01"
-  solde: mois.solde_fin,
-  revenus: mois.total_revenus,
-  depenses: mois.total_prelevements
-}));
-```
+### 9.2 Sécurité en production
 
-##### **Pour détecter les mois critiques :**
-```javascript
-// Identifier les mois avec solde négatif
-const moisCritiques = response.projections_mensuelles
-  .filter(mois => mois.solde_fin < 0)
-  .map(mois => ({
-    periode: mois.mois,
-    solde: mois.solde_fin,
-    deficit: Math.abs(mois.solde_fin)
-  }));
-```
+- **HTTPS obligatoire** : Toutes les communications chiffrées
+- **Rate limiting** : Protection contre les abus
+- **Validation stricte** : Vérification de toutes les données d'entrée
+- **Audit trail** : Traçabilité complète des modifications
 
-##### **Pour calculer la capacité d'épargne :**
-```javascript
-// Capacité d'épargne moyenne par mois
-const capaciteEpargne = response.projections_mensuelles
-  .map(mois => mois.variation)
-  .reduce((sum, variation) => sum + variation, 0) / response.periode_mois;
-```
+---
 
-#### **POST /api/v1/budget-projections/quick_projection/**
-**Projection rapide paramétrable pour un compte**
+## 10. Support et maintenance
 
-**Description :** Version simplifiée pour obtenir rapidement les informations essentielles sans le détail mensuel.
+### 10.1 Documentation
 
-**Corps de la requête :**
-```json
-{
-  "compte_id": 52,
-  "periode_mois": 6
-}
-```
+- **API Documentation** : Documentation complète et mise à jour
+- **Changelog** : Historique des modifications
+- **Exemples d'utilisation** : Cas d'usage courants
 
-**Note :** Le paramètre `periode_mois` est optionnel (défaut: 6, max: 60).
+### 10.2 Monitoring
 
-**Réponse :**
-```json
-{
-  "compte": {
-    "id": 52,
-    "nom": "PEL Banque Populaire",
-    "solde_actuel": 19944.49
-  },
-  "projection": {
-    "periode_mois": 6,
-    "solde_final": 50110.93,
-    "variation_totale": 30166.44,
-    "revenus_totaux": 35304.42,
-    "prelevements_totaux": 5137.98,
-    "solde_minimum": 19944.49,
-    "mois_solde_negatif": 0
-  },
-  "alertes": {
-    "deficit_prevu": false,
-    "amelioration": true
-  }
-}
-```
+- **Statistiques de performance** : Temps de réponse, taux d'erreur
+- **Alertes automatiques** : Notifications en cas de problème
+- **Tableau de bord opérationnel** : Vue d'ensemble du système
 
-**💡 Utilisation recommandée :**
-- **Cartes de résumé** : Utilisez `projection.solde_final` et `projection.variation_totale`
-- **Indicateurs de santé** : Utilisez `alertes.deficit_prevu` et `projection.mois_solde_negatif`
-- **Alertes visuelles** : Rouge si `deficit_prevu = true`, vert si `amelioration = true`
-
-#### **GET /api/v1/budget-projections/dashboard/**
-**Tableau de bord complet avec projections intégrées**
-
-**Description :** Endpoint principal pour obtenir une vue d'ensemble complète avec projections, alertes et métriques.
-
-**Paramètres de requête optionnels :**
-- `periode_mois` : Nombre de mois pour la projection (défaut: 3, max: 60)
-
-**Exemple d'usage :**
-```
-GET /api/v1/budget-projections/dashboard/?periode_mois=6
-```
-
-**Structure de réponse (partie projections) :**
-```json
-{
-  "overview": {
-    "solde_total": 42488.44,
-    "revenus_mensuels": 5884.07,
-    "prelevements_mensuels": 856.33,
-    "solde_mensuel_estime": 5027.74,
-    "sante_financiere": "excellente"
-  },
-  "projections": {
-    "periode_mois": 6,
-    "tendance_mois": [
-      {
-        "mois": 1,
-        "solde_projete": 47516.18,
-        "variation": 5027.74
-      },
-      {
-        "mois": 2,
-        "solde_projete": 52543.92,
-        "variation": 5027.74
-      },
-      {
-        "mois": 6,
-        "solde_projete": 72654.40,
-        "variation": 5027.74
-      }
-    ],
-    "capacite_epargne_mensuelle": 5027.74,
-    "mois_avant_deficit": null
-  }
-}
-```
-
-**💡 Utilisation du dashboard :**
-
-##### **Graphique de tendance simple :**
-```javascript
-// Données pour graphique linéaire
-const trendData = response.projections.tendance_mois.map((mois, index) => ({
-  x: index + 1,
-  y: mois.solde_projete,
-  label: `Mois ${mois.mois}`
-}));
-```
-
-##### **Indicateurs de performance :**
-```javascript
-// Calculs d'indicateurs
-const performanceIndicators = {
-  croissanceMoyenne: response.projections.capacite_epargne_mensuelle,
-  croissanceTotale: response.projections.tendance_mois[response.projections.tendance_mois.length - 1].solde_projete - response.overview.solde_total,
-  statusFinancier: response.overview.sante_financiere,
-  alerteDeficit: response.projections.mois_avant_deficit !== null
-};
-```
-
-#### **GET /api/v1/budget-projections/compare_scenarios/**
-**Comparer différents scénarios de projection**
-
-**Description :** Analyse comparative pour visualiser l'impact des revenus et prélèvements séparément.
-
-**Paramètres de requête :**
-- `compte_id` : ID du compte (requis)
-- `periode_mois` : Nombre de mois pour la projection (optionnel, défaut: 12, max: 60)
-
-**Exemple d'usage :**
-```
-GET /api/v1/budget-projections/compare_scenarios/?compte_id=52&periode_mois=12
-```
-
-**Réponse :**
-```json
-{
-  "compte": {
-    "id": 52,
-    "nom": "PEL Banque Populaire",
-    "solde_actuel": 19944.49
-  },
-  "periode_mois": 12,
-  "scenarios": {
-    "complet": {
-      "nom": "Projection complète",
-      "solde_final": 75000.50,
-      "variation": 55056.01,
-      "solde_minimum": 19944.49,
-      "mois_deficit": 0
-    },
-    "prelevements_seulement": {
-      "nom": "Prélèvements uniquement",
-      "solde_final": 15000.25,
-      "variation": -4944.24,
-      "solde_minimum": 12500.00,
-      "mois_deficit": 0
-    },
-    "revenus_seulement": {
-      "nom": "Revenus uniquement",
-      "solde_final": 90000.75,
-      "variation": 70056.26,
-      "solde_minimum": 19944.49,
-      "mois_deficit": 0
-    }
-  }
-}
-```
-
-**💡 Analyse des scénarios :**
-
-##### **Impact des revenus vs prélèvements :**
-```javascript
-// Calculer l'impact de chaque composante
-const impactAnalysis = {
-  impactRevenus: response.scenarios.revenus_seulement.variation,
-  impactPrelevements: Math.abs(response.scenarios.prelevements_seulement.variation),
-  beneficeNet: response.scenarios.complet.variation,
-  ratioPositivite: response.scenarios.revenus_seulement.variation / Math.abs(response.scenarios.prelevements_seulement.variation)
-};
-```
-
-##### **Détection de risques :**
-```javascript
-// Identifier les risques financiers
-const riskAssessment = {
-  risqueDeficit: response.scenarios.prelevements_seulement.mois_deficit > 0,
-  dependanceRevenus: response.scenarios.complet.solde_minimum <= response.compte.solde_actuel,
-  margeSecurite: response.scenarios.complet.solde_minimum - response.compte.solde_actuel
-};
-```
-
-### 6.5 Données regroupées
-
-#### **GET /api/v1/operations/by_account/**
-**Opérations groupées par compte**
-
-#### **GET /api/v1/direct-debits/by_account/**
-**Prélèvements groupés par compte**
-
-#### **GET /api/v1/recurring-incomes/by_account/**
-**Revenus récurrents groupés par compte**
-
-### 6.6 Guide d'utilisation pratique des projections
-
-#### **Stratégie d'endpoints selon le cas d'usage :**
-
-##### **🏠 Dashboard principal d'accueil :**
-```javascript
-// Appel initial pour vue d'ensemble
-GET /api/v1/budget-projections/dashboard/?periode_mois=3
-
-// Utilisation recommandée :
-- Afficher overview.solde_total en grand
-- Graphique simple avec projections.tendance_mois
-- Indicateur de santé : overview.sante_financiere
-- Alertes rapides basées sur alertes.niveau_urgence
-```
-
-##### **📈 Page d'analyse détaillée :**
-```javascript
-// Pour graphiques et analyses poussées
-POST /api/v1/budget-projections/calculate/
-{
-  "compte_reference": compte_id,
-  "periode_mois": 12,
-  "inclure_prelevements": true,
-  "inclure_revenus": true
-}
-
-// Utilisation recommandée :
-- Graphique détaillé avec projections_mensuelles[].solde_fin
-- Table des transactions mensuelles
-- Analyse des pics/creux avec resume.solde_minimum/maximum
-```
-
-##### **⚡ Résumés rapides (cartes, widgets) :**
-```javascript
-// Pour affichages compacts
-POST /api/v1/budget-projections/quick_projection/
-{
-  "compte_id": compte_id,
-  "periode_mois": 6
-}
-
-// Utilisation recommandée :
-- Widget "Dans 6 mois : +X€"
-- Indicateur progression avec projection.variation_totale
-- Badge d'alerte si alertes.deficit_prevu
-```
-
-##### **🔍 Analyse comparative et diagnostics :**
-```javascript
-// Pour comprendre l'impact des revenus/charges
-GET /api/v1/budget-projections/compare_scenarios/?compte_id=X&periode_mois=12
-
-// Utilisation recommandée :
-- Graphique comparatif des 3 scénarios
-- Analyse "Que se passerait-il si..." 
-- Conseils automatiques basés sur les ratios
-```
-
-#### **🎨 Recommandations d'interface :**
-
-##### **Codes couleur suggérés :**
-```css
-/* Santé financière */
-.excellente { color: #22c55e; } /* Vert foncé */
-.bonne { color: #84cc16; }      /* Vert clair */
-.fragile { color: #f59e0b; }    /* Orange */
-.critique { color: #ef4444; }   /* Rouge */
-
-/* Variations */
-.variation-positive { color: #16a34a; }
-.variation-negative { color: #dc2626; }
-.variation-neutre { color: #6b7280; }
-```
-
-##### **Seuils d'alertes recommandés :**
-```javascript
-// Logique d'affichage des alertes
-function getAlertLevel(projection) {
-  if (projection.mois_solde_negatif > 0) return 'critique';
-  if (projection.solde_minimum < 500) return 'attention'; 
-  if (projection.variation_totale < 0) return 'vigilance';
-  return 'normal';
-}
-```
-
-#### **📱 Recommandations d'UX mobile :**
-
-##### **Affichage adaptatif :**
-- **Mobile** : Privilégier `quick_projection` pour la rapidité
-- **Tablette** : Dashboard complet avec graphiques simplifiés  
-- **Desktop** : Analyse détaillée avec `calculate` et comparaisons
-
-##### **Mise en cache intelligente :**
-```javascript
-// Cache recommandé
-const cacheStrategy = {
-  dashboard: '5 minutes',      // Données temps réel
-  quick_projection: '15 minutes', // Résumés fréquents
-  calculate: '30 minutes',     // Analyses détaillées
-  compare_scenarios: '1 heure' // Comparaisons statiques
-};
-```
-
-#### **🔧 Exemples d'intégration complète :**
-
-##### **Widget résumé compte :**
-```javascript
-async function loadAccountSummary(accountId) {
-  const response = await fetch(`/api/v1/budget-projections/quick_projection/`, {
-    method: 'POST',
-    body: JSON.stringify({ compte_id: accountId, periode_mois: 3 })
-  });
-  
-  const data = await response.json();
-  
-  return {
-    currentBalance: data.compte.solde_actuel,
-    projectedBalance: data.projection.solde_final,
-    monthlyGrowth: data.projection.variation_totale / data.projection.periode_mois,
-    isImproving: data.alertes.amelioration,
-    hasDeficit: data.alertes.deficit_prevu
-  };
-}
-```
-
-##### **Graphique d'évolution :**
-```javascript
-async function loadEvolutionChart(accountId, months = 6) {
-  const response = await fetch(`/api/v1/budget-projections/calculate/`, {
-    method: 'POST',
-    body: JSON.stringify({
-      compte_reference: accountId,
-      periode_mois: months
-    })
-  });
-  
-  const data = await response.json();
-  
-  return {
-    labels: data.projections_mensuelles.map(m => m.date_debut.substring(5, 7)), // "01", "02"...
-    datasets: [{
-      label: 'Solde projeté',
-      data: data.projections_mensuelles.map(m => m.solde_fin),
-      borderColor: '#3b82f6',
-      backgroundColor: '#dbeafe'
-    }]
-  };
-}
-```
-
-#### **Indicateurs visuels suggérés :**
-
-##### **Santé financière :**
-- `excellente` : Vert foncé 🟢
-- `bonne` : Vert clair 🟢
-- `fragile` : Orange 🟠
-- `critique` : Rouge 🔴
-
-##### **Status des comptes :**
-- `excellent` : Solde > 1000€
-- `bon` : Solde > 0€
-- `attention` : Solde > -500€
-- `critique` : Solde ≤ -500€
-
-##### **Niveau d'urgence :**
-- `normal` : Pas d'action requise
-- `attention` : Surveillance recommandée
-- `critique` : Action immédiate requise 
+Cette documentation est régulièrement mise à jour pour refléter les dernières évolutions de l'API. Pour toute question ou suggestion d'amélioration, n'hésitez pas à contacter l'équipe de développement.
