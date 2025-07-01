@@ -105,7 +105,7 @@ DATABASES = {
 # Configuration MongoDB pour les logs
 MONGODB_CONFIG = {
     'host': os.getenv('MONGODB_HOST'),
-    'port': int(os.getenv('MONGODB_PORT')),
+    'port': os.getenv('MONGODB_PORT'),
     'database': os.getenv('MONGODB_DATABASE'),
     'username': os.getenv('MONGODB_USERNAME'),
     'password': os.getenv('MONGODB_PASSWORD'),
