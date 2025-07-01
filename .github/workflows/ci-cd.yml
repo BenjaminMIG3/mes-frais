@@ -12,6 +12,32 @@ jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: test_db
+          MYSQL_USER: test_user
+          MYSQL_PASSWORD: test_password
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+      mongodb:
+        image: mongo:5.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: test_user
+          MONGO_INITDB_ROOT_PASSWORD: test_password
+          MONGO_INITDB_DATABASE: test_mes
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd="mongo --eval 'db.runCommand({ping: 1})'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
     steps:
       # Étape 1 : Cloner le dépôt
       - name: Checkout code
@@ -39,17 +65,17 @@ jobs:
       # Étape 5 : Exécuter les tests unitaires
       - name: Run tests
         env:
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          MONGODB_HOST: ${{ secrets.DB_HOST }}
-          MONGODB_PORT: ${{ secrets.MONGODB_PORT }}
-          MONGODB_DATABASE: ${{ secrets.MONGODB_NAME }}
-          MONGODB_USERNAME: ${{ secrets.DB_USER }}
-          MONGODB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: test_db
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: localhost
+          DB_PORT: 3306
+          MONGODB_HOST: localhost
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: test_mes
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
           MONGODB_AUTH_SOURCE: admin
         run: |
           source venv/bin/activate
@@ -58,17 +84,17 @@ jobs:
       # Étape 6 : Collecter les fichiers statiques
       - name: Collect static files
         env:
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: 
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          MONGODB_HOST: ${{ secrets.DB_HOST }}
-          MONGODB_PORT: ${{ secrets.MONGODB_PORT }}
-          MONGODB_DATABASE: ${{ secrets.MONGODB_NAME }}
-          MONGODB_USERNAME: ${{ secrets.DB_USER }}
-          MONGODB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: test_db
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: localhost
+          DB_PORT: 3306
+          MONGODB_HOST: localhost
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: test_mes
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
           MONGODB_AUTH_SOURCE: admin
         run: |
           source venv/bin/activate
