@@ -7,6 +7,8 @@ from django.contrib.admin import AdminSite
 from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection, AutomatedTask, AutomaticTransaction
 
 
+# ozdjuzndzndzun
+
 class BaseModelAdmin(admin.ModelAdmin):
     """Classe de base pour l'administration des modèles avec champs communs"""
     readonly_fields = ('created_at', 'updated_at')
