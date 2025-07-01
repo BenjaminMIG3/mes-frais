@@ -254,51 +254,44 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     name: Déploiement en Production
-    needs: [build]  # Modifié pour ne dépendre que de build, car test est désactivé
+    needs: [build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Debug SSH variables
-        run: |
-          echo "SERVER_USER: $SERVER_USER"
-          echo "SERVER_IP: $SERVER_IP"
-          echo "PROJECT_PATH: ${{ secrets.PROJECT_PATH }}"
-          echo "VENV_PATH: ${{ secrets.VENV_PATH }}"
-          echo "SERVICE_NAME: ${{ secrets.SERVICE_NAME }}"
-        env:
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-
       - name: Deploy to server
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
 
-          ssh -v -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
+          ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
             cd ${{ secrets.PROJECT_PATH }}
             git pull origin main
             source ${{ secrets.VENV_PATH }}/bin/activate
             pip install -r requirements.txt
             python manage.py migrate --noinput
             python manage.py collectstatic --noinput
-            # Utilisation de sudo -S pour fournir le mot de passe si nécessaire
-            # On définit le mot de passe comme variable d'environnement pour éviter les problèmes d'échappement
-            SUDO_PASS=${{ secrets.SUDO_PASSWORD }}
-            # Tenter d'exécuter sans mot de passe d'abord, en utilisant le chemin complet
-            sudo /usr/bin/systemctl restart ${{ secrets.SERVICE_NAME }} || echo "$SUDO_PASS" | sudo -S /usr/bin/systemctl restart ${{ secrets.SERVICE_NAME }}
             
-            # Vérification que le service a bien redémarré
+            # Créer un script temporaire pour le redémarrage
+            cat > /tmp/restart_service.sh << 'SCRIPT_EOF'
+            #!/bin/bash
+            echo "${{ secrets.SUDO_PASSWORD }}" | sudo -S /usr/bin/systemctl restart ${{ secrets.SERVICE_NAME }}
             sleep 5
-            sudo /usr/bin/systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
+            echo "${{ secrets.SUDO_PASSWORD }}" | sudo -S /usr/bin/systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
+            SCRIPT_EOF
+                      
+            chmod +x /tmp/restart_service.sh
+            /tmp/restart_service.sh
+            rm /tmp/restart_service.sh
           EOF
 
   # Job 4: Notification du déploiement (optionnel)
