@@ -413,7 +413,7 @@ class AutomatedTask(BaseModel):
         ordering = ['-execution_date']
     
     def __str__(self):
-        return f"{self.get_task_type_display()} - {self.execution_date.strftime('%d/%m/%Y %H:%M')} - {self.get_status_display()}"
+        return f"Tâche automatique #{self.id} - {self.task_type} - {self.status}"
     
     @classmethod
     def log_task(cls, task_type, status, processed_count=0, error_message=None, execution_duration=None, details=None, user=None):

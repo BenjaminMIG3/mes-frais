@@ -242,14 +242,12 @@ class AuthViewSet(viewsets.ViewSet):
         try:
             print(f"✅ SUCCÈS PROFILE - Profil récupéré: {request.user.username} (ID: {request.user.id})")
             return Response({
-                'user': {
-                    'id': request.user.id,
-                    'username': request.user.username,
-                    'email': request.user.email,
-                    'first_name': request.user.first_name,
-                    'last_name': request.user.last_name,
-                    'date_joined': request.user.date_joined
-                }
+                'id': request.user.id,
+                'username': request.user.username,
+                'email': request.user.email,
+                'first_name': request.user.first_name,
+                'last_name': request.user.last_name,
+                'date_joined': request.user.date_joined
             }, status=status.HTTP_200_OK)
         except Exception as e:
             print(f"❌ ERREUR PROFILE - Exception: {str(e)}")

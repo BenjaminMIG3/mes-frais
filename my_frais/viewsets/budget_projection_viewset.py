@@ -71,7 +71,7 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         
         validated_data = serializer.validated_data
         projections = serializer.calculate_projections(
-            compte=validated_data['compte_reference'],
+            compte=validated_data['compte'],  # Corriger pour utiliser 'compte' au lieu de 'compte_reference'
             date_debut=validated_data['date_debut'],
             periode_mois=validated_data['periode_mois'],
             inclure_prelevements=validated_data['inclure_prelevements'],

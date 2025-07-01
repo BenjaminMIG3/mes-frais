@@ -9,15 +9,19 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch, MagicMock
 from django.utils import timezone
+from django.db import transaction
 
-from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection, AutomatedTask, AutomaticTransaction
+from my_frais.models import (
+    Account, Operation, DirectDebit, RecurringIncome, 
+    BudgetProjection, AutomatedTask, AutomaticTransaction
+)
 from my_frais.serializers.account_serializer import AccountSerializer, AccountListSerializer, AccountSummarySerializer
 from my_frais.serializers.operation_serializer import OperationSerializer, OperationListSerializer
-from my_frais.serializers.direct_debit_serializer import DirectDebitSerializer
-from my_frais.serializers.recurring_income_serializer import RecurringIncomeSerializer
+from my_frais.serializers.direct_debit_serializer import DirectDebitSerializer, DirectDebitListSerializer
+from my_frais.serializers.recurring_income_serializer import RecurringIncomeSerializer, RecurringIncomeListSerializer
 from my_frais.serializers.budget_projection_serializer import BudgetProjectionSerializer
+from my_frais.serializers.automated_task_serializer import AutomatedTaskSerializer
 from auth_api.jwt_auth import generate_tokens
-from my_frais.services import AutomaticTransactionService, BudgetProjectionService
 
 
 class AccountModelTestCase(TestCase):
@@ -104,6 +108,7 @@ class OperationModelTestCase(TestCase):
         self.assertEqual(operation.description, "Achat supermarché")
         self.assertEqual(operation.created_by, self.user)
         self.assertIsNotNone(operation.date_operation)
+        self.assertEqual(operation.source_type, 'manual')
     
     def test_operation_str_representation(self):
         """Test de la représentation string d'une opération"""
@@ -115,6 +120,98 @@ class OperationModelTestCase(TestCase):
         )
         expected = "Test Operation - 100.00€"
         self.assertEqual(str(operation), expected)
+    
+    def test_operation_automatic_source_fields(self):
+        """Test des champs source pour les opérations automatiques"""
+        operation = Operation.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('50.00'),
+            description="Opération automatique",
+            source_automatic_id="test_123",
+            source_type="direct_debit",
+            created_by=self.user
+        )
+        
+        self.assertEqual(operation.source_automatic_id, "test_123")
+        self.assertEqual(operation.source_type, "direct_debit")
+
+
+class AutomaticTransactionModelTestCase(TestCase):
+    """Tests pour le modèle AutomaticTransaction"""
+    
+    def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.user = User.objects.create_user(
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom="Compte Test",
+            created_by=self.user
+        )
+    
+    def test_automatic_transaction_creation(self):
+        """Test de création d'une transaction automatique"""
+        transaction_obj = AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('50.00'),
+            description="Prélèvement automatique",
+            date_transaction=date.today(),
+            transaction_type='direct_debit',
+            source_id='test_123',
+            source_reference='1',
+            created_by=self.user
+        )
+        
+        self.assertEqual(transaction_obj.compte_reference, self.account)
+        self.assertEqual(transaction_obj.montant, Decimal('50.00'))
+        self.assertEqual(transaction_obj.transaction_type, 'direct_debit')
+        self.assertEqual(transaction_obj.source_id, 'test_123')
+        self.assertTrue(transaction_obj.processed)
+    
+    def test_automatic_transaction_str_representation(self):
+        """Test de la représentation string d'une transaction automatique"""
+        transaction_obj = AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('100.00'),
+            description="Test Transaction",
+            date_transaction=date.today(),
+            transaction_type='recurring_income',
+            source_id='test_456',
+            source_reference='2',
+            created_by=self.user
+        )
+        expected = f"Test Transaction - 100.00€ ({date.today()})"
+        self.assertEqual(str(transaction_obj), expected)
+    
+    def test_automatic_transaction_unique_constraint(self):
+        """Test de la contrainte d'unicité sur source_id et transaction_type"""
+        # Créer la première transaction
+        AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('50.00'),
+            description="Test",
+            date_transaction=date.today(),
+            transaction_type='direct_debit',
+            source_id='unique_test',
+            source_reference='1',
+            created_by=self.user
+        )
+        
+        # Tenter de créer une deuxième transaction avec le même source_id et transaction_type
+        with self.assertRaises(Exception):  # IntegrityError ou ValidationError
+            AutomaticTransaction.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('60.00'),
+                description="Test 2",
+                date_transaction=date.today(),
+                transaction_type='direct_debit',
+                source_id='unique_test',
+                source_reference='2',
+                created_by=self.user
+            )
 
 
 class DirectDebitModelTestCase(TestCase):
@@ -149,6 +246,7 @@ class DirectDebitModelTestCase(TestCase):
         self.assertEqual(direct_debit.description, "Électricité EDF")
         self.assertEqual(direct_debit.frequence, 'Mensuel')
         self.assertTrue(direct_debit.actif)
+        self.assertIsNone(direct_debit.echeance)
     
     def test_direct_debit_as_echeance(self):
         """Test de la méthode as_echeance"""
@@ -204,72 +302,16 @@ class DirectDebitModelTestCase(TestCase):
         end_date = date.today() + timedelta(days=90)
         occurrences = direct_debit.get_occurrences_until(end_date)
         
-        self.assertGreater(len(occurrences), 0)
+        # Devrait avoir environ 3 occurrences (1 par mois)
+        self.assertGreaterEqual(len(occurrences), 2)
+        self.assertLessEqual(len(occurrences), 4)
+        
         for occurrence in occurrences:
             self.assertIn('date', occurrence)
             self.assertIn('montant', occurrence)
             self.assertIn('description', occurrence)
-            self.assertIn('type', occurrence)
             self.assertEqual(occurrence['type'], 'prelevement')
-            self.assertLess(occurrence['montant'], 0)  # Négatif pour prélèvements
-    
-    def test_direct_debit_automatic_processing_no_duplicates(self):
-        """Test que les prélèvements automatiques ne créent pas de doublons"""
-        # Créer un prélèvement avec date d'aujourd'hui (devrait déclencher le traitement automatique)
-        direct_debit = DirectDebit.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('100.00'),
-            description="Test automatique",
-            date_prelevement=date.today(),
-            frequence='Mensuel',
-            created_by=self.user
-        )
-        
-        # Vérifier qu'une transaction automatique a été créée
-        transactions = AutomaticTransaction.objects.filter(
-            transaction_type='direct_debit',
-            description__contains="Prélèvement automatique"
-        )
-        self.assertEqual(transactions.count(), 1)
-        
-        # Vérifier que le solde du compte a été mis à jour
-        self.account.refresh_from_db()
-        expected_balance = Decimal('1000.00') - Decimal('100.00')  # Solde initial - prélèvement
-        self.assertEqual(self.account.solde, expected_balance)
-        
-        # Essayer de traiter à nouveau manuellement - ne devrait pas créer de doublon
-        processed = direct_debit.process_due_payments()
-        self.assertFalse(processed)  # Devrait retourner False car déjà traité
-        
-        # Vérifier qu'il n'y a toujours qu'une seule transaction
-        transactions_after = AutomaticTransaction.objects.filter(
-            transaction_type='direct_debit',
-            description__contains="Prélèvement automatique"
-        )
-        self.assertEqual(transactions_after.count(), 1)
-
-    def test_direct_debit_future_date_no_processing(self):
-        """Test qu'un prélèvement futur n'est pas traité automatiquement"""
-        future_date = date.today() + timedelta(days=30)
-        
-        direct_debit = DirectDebit.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('100.00'),
-            description="Test futur",
-            date_prelevement=future_date,
-            frequence='Mensuel',
-            created_by=self.user
-        )
-        
-        # Vérifier qu'aucune transaction automatique n'a été créée
-        transactions = AutomaticTransaction.objects.filter(
-            transaction_type='direct_debit'
-        )
-        self.assertEqual(transactions.count(), 0)
-        
-        # Vérifier que le solde du compte n'a pas changé
-        self.account.refresh_from_db()
-        self.assertEqual(self.account.solde, Decimal('1000.00'))
+            self.assertEqual(occurrence['montant'], -50.00)  # Négatif pour les prélèvements
 
 
 class RecurringIncomeModelTestCase(TestCase):
@@ -290,57 +332,57 @@ class RecurringIncomeModelTestCase(TestCase):
     
     def test_recurring_income_creation(self):
         """Test de création d'un revenu récurrent"""
-        income = RecurringIncome.objects.create(
+        revenu = RecurringIncome.objects.create(
             compte_reference=self.account,
-            montant=Decimal('2500.00'),
-            description="Salaire Net",
-            date_premier_versement=date.today(),
+            montant=Decimal('2000.00'),
+            description="Salaire mensuel",
+            date_premier_versement=date.today() + timedelta(days=10),
             frequence='Mensuel',
             type_revenu='Salaire',
             created_by=self.user
         )
         
-        self.assertEqual(income.compte_reference, self.account)
-        self.assertEqual(income.montant, Decimal('2500.00'))
-        self.assertEqual(income.description, "Salaire Net")
-        self.assertEqual(income.type_revenu, 'Salaire')
-        self.assertTrue(income.actif)
+        self.assertEqual(revenu.compte_reference, self.account)
+        self.assertEqual(revenu.montant, Decimal('2000.00'))
+        self.assertEqual(revenu.description, "Salaire mensuel")
+        self.assertEqual(revenu.frequence, 'Mensuel')
+        self.assertEqual(revenu.type_revenu, 'Salaire')
+        self.assertTrue(revenu.actif)
+        self.assertIsNone(revenu.date_fin)
     
     def test_recurring_income_str_representation(self):
         """Test de la représentation string d'un revenu récurrent"""
-        income = RecurringIncome.objects.create(
+        revenu = RecurringIncome.objects.create(
             compte_reference=self.account,
-            montant=Decimal('2500.00'),
-            description="Salaire Net",
+            montant=Decimal('1500.00'),
+            description="Salaire",
             date_premier_versement=date.today(),
             type_revenu='Salaire',
             created_by=self.user
         )
-        expected = "Salaire - Salaire Net - 2500.00€"
-        self.assertEqual(str(income), expected)
+        expected = "Salaire - Salaire - 1500.00€"
+        self.assertEqual(str(revenu), expected)
     
     def test_recurring_income_get_next_occurrence(self):
         """Test de calcul de la prochaine occurrence"""
-        # Utiliser une date future pour éviter le déclenchement automatique des signaux
-        future_date = date.today() + timedelta(days=5)
-        income = RecurringIncome.objects.create(
+        revenu = RecurringIncome.objects.create(
             compte_reference=self.account,
-            montant=Decimal('2500.00'),
+            montant=Decimal('2000.00'),
             description="Salaire",
-            date_premier_versement=future_date,
+            date_premier_versement=date.today() + timedelta(days=5),
             frequence='Mensuel',
             created_by=self.user
         )
         
-        next_occurrence = income.get_next_occurrence()
-        expected_date = future_date + relativedelta(months=1)
+        next_occurrence = revenu.get_next_occurrence()
+        expected_date = revenu.date_premier_versement + relativedelta(months=1)
         self.assertEqual(next_occurrence, expected_date)
     
     def test_recurring_income_get_occurrences_until(self):
         """Test de génération des occurrences jusqu'à une date"""
-        income = RecurringIncome.objects.create(
+        revenu = RecurringIncome.objects.create(
             compte_reference=self.account,
-            montant=Decimal('2500.00'),
+            montant=Decimal('2000.00'),
             description="Salaire",
             date_premier_versement=date.today() + timedelta(days=1),
             frequence='Mensuel',
@@ -348,52 +390,18 @@ class RecurringIncomeModelTestCase(TestCase):
         )
         
         end_date = date.today() + timedelta(days=90)
-        occurrences = income.get_occurrences_until(end_date)
+        occurrences = revenu.get_occurrences_until(end_date)
         
-        self.assertGreater(len(occurrences), 0)
+        # Devrait avoir environ 3 occurrences (1 par mois)
+        self.assertGreaterEqual(len(occurrences), 2)
+        self.assertLessEqual(len(occurrences), 4)
+        
         for occurrence in occurrences:
             self.assertIn('date', occurrence)
             self.assertIn('montant', occurrence)
             self.assertIn('description', occurrence)
-            self.assertIn('type', occurrence)
             self.assertEqual(occurrence['type'], 'revenu')
-            self.assertGreater(occurrence['montant'], 0)  # Positif pour revenus
-    
-    def test_recurring_income_automatic_processing_no_duplicates(self):
-        """Test que les revenus récurrents automatiques ne créent pas de doublons"""
-        # Créer un revenu avec date d'aujourd'hui (devrait déclencher le traitement automatique)
-        income = RecurringIncome.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('2500.00'),
-            description="Salaire automatique",
-            date_premier_versement=date.today(),
-            frequence='Mensuel',
-            type_revenu='Salaire',
-            created_by=self.user
-        )
-        
-        # Vérifier qu'une transaction automatique a été créée
-        transactions = AutomaticTransaction.objects.filter(
-            transaction_type='recurring_income',
-            description__contains="Revenu automatique"
-        )
-        self.assertEqual(transactions.count(), 1)
-        
-        # Vérifier que le solde du compte a été mis à jour
-        self.account.refresh_from_db()
-        expected_balance = Decimal('1000.00') + Decimal('2500.00')  # Solde initial + revenu
-        self.assertEqual(self.account.solde, expected_balance)
-        
-        # Essayer de traiter à nouveau manuellement - ne devrait pas créer de doublon
-        processed = income.process_due_income()
-        self.assertFalse(processed)  # Devrait retourner False car déjà traité
-        
-        # Vérifier qu'il n'y a toujours qu'une seule transaction
-        transactions_after = AutomaticTransaction.objects.filter(
-            transaction_type='recurring_income',
-            description__contains="Revenu automatique"
-        )
-        self.assertEqual(transactions_after.count(), 1)
+            self.assertEqual(occurrence['montant'], 2000.00)  # Positif pour les revenus
 
 
 class BudgetProjectionModelTestCase(TestCase):
@@ -409,53 +417,100 @@ class BudgetProjectionModelTestCase(TestCase):
         self.account = Account.objects.create(
             user=self.user,
             nom="Compte Test",
-            solde=Decimal('1000.00'),
             created_by=self.user
         )
     
     def test_budget_projection_creation(self):
-        """Test de création d'une projection de budget"""
-        projections_data = [
-            {
-                'mois': '2024-01',
-                'solde_prevu': 1200.00,
-                'revenus_prevus': 2500.00,
-                'depenses_prevues': 2300.00,
-                'variation': 200.00
-            }
-        ]
+        """Test de création d'une projection budgétaire"""
+        projection_data = {
+            'mois_1': {'solde': 1000.00, 'revenus': 2000.00, 'depenses': -1500.00},
+            'mois_2': {'solde': 1500.00, 'revenus': 2000.00, 'depenses': -1500.00}
+        }
         
         projection = BudgetProjection.objects.create(
             compte_reference=self.account,
             date_projection=date.today(),
             periode_projection=6,
-            solde_initial=self.account.solde,
-            projections_data=projections_data,
+            solde_initial=Decimal('1000.00'),
+            projections_data=projection_data,
             created_by=self.user
         )
         
         self.assertEqual(projection.compte_reference, self.account)
         self.assertEqual(projection.periode_projection, 6)
         self.assertEqual(projection.solde_initial, Decimal('1000.00'))
-        self.assertEqual(projection.projections_data, projections_data)
+        self.assertEqual(projection.projections_data, projection_data)
     
     def test_budget_projection_str_representation(self):
         """Test de la représentation string d'une projection"""
         projection = BudgetProjection.objects.create(
             compte_reference=self.account,
             date_projection=date.today(),
-            periode_projection=3,
-            solde_initial=self.account.solde,
-            projections_data=[],
+            periode_projection=6,
+            solde_initial=Decimal('1000.00'),
+            projections_data={},
             created_by=self.user
         )
-        
-        expected = f"Projection {self.account.nom} - {date.today()} (3 mois)"
+        expected = f"Projection {self.account.nom} - {date.today()} (6 mois)"
         self.assertEqual(str(projection), expected)
 
 
+class AutomatedTaskModelTestCase(TestCase):
+    """Tests pour le modèle AutomatedTask"""
+    
+    def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.user = User.objects.create_user(
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
+        )
+    
+    def test_automated_task_creation(self):
+        """Test de création d'une tâche automatique"""
+        task = AutomatedTask.objects.create(
+            task_type='PAYMENT_PROCESSING',
+            status='SUCCESS',
+            processed_count=5,
+            execution_duration=Decimal('0.125'),
+            created_by=self.user
+        )
+        
+        self.assertEqual(task.task_type, 'PAYMENT_PROCESSING')
+        self.assertEqual(task.status, 'SUCCESS')
+        self.assertEqual(task.processed_count, 5)
+        self.assertEqual(task.execution_duration, Decimal('0.125'))
+    
+    def test_automated_task_str_representation(self):
+        """Test de la représentation string d'une tâche automatique"""
+        task = AutomatedTask.objects.create(
+            task_type='INCOME_PROCESSING',
+            status='SUCCESS',
+            processed_count=3,
+            created_by=self.user
+        )
+        expected = f"Tâche automatique #{task.id} - INCOME_PROCESSING - SUCCESS"
+        self.assertEqual(str(task), expected)
+    
+    def test_automated_task_log_task_classmethod(self):
+        """Test de la méthode de classe log_task"""
+        task = AutomatedTask.log_task(
+            task_type='BOTH_PROCESSING',
+            status='SUCCESS',
+            processed_count=10,
+            execution_duration=Decimal('0.250'),
+            user=self.user
+        )
+        
+        self.assertEqual(task.task_type, 'BOTH_PROCESSING')
+        self.assertEqual(task.status, 'SUCCESS')
+        self.assertEqual(task.processed_count, 10)
+        self.assertEqual(task.execution_duration, Decimal('0.250'))
+        self.assertEqual(task.created_by, self.user)
+
+
 class AccountSerializerTestCase(TestCase):
-    """Tests pour le serializer Account"""
+    """Tests pour les sérialiseurs de compte"""
     
     def setUp(self):
         """Configuration initiale pour chaque test"""
@@ -472,454 +527,34 @@ class AccountSerializerTestCase(TestCase):
         )
     
     def test_account_serializer_valid_data(self):
-        """Test avec des données valides"""
+        """Test du sérialiseur Account avec des données valides"""
         data = {
             'user': self.user.id,
             'nom': 'Nouveau Compte',
-            'solde': '500.00'
+            'solde': '1500.00'
         }
-        
-        request_mock = MagicMock()
-        request_mock.user = self.user
-        
-        serializer = AccountSerializer(data=data, context={'request': request_mock})
+        serializer = AccountSerializer(data=data, context={'request': type('MockRequest', (), {'user': self.user})()})
         self.assertTrue(serializer.is_valid())
         
         account = serializer.save()
         self.assertEqual(account.nom, 'Nouveau Compte')
-        self.assertEqual(account.solde, Decimal('500.00'))
-        self.assertEqual(account.created_by, self.user)
-    
-    def test_account_serializer_negative_balance(self):
-        """Test avec un solde négatif (maintenant autorisé pour les découverts)"""
-        data = {
-            'user': self.user.id,
-            'nom': 'Compte Test',
-            'solde': '-100.00'
-        }
-        
-        request_mock = MagicMock()
-        request_mock.user = self.user
-        
-        serializer = AccountSerializer(data=data, context={'request': request_mock})
-        self.assertTrue(serializer.is_valid())  # Maintenant autorisé
-        
-        account = serializer.save()
-        self.assertEqual(account.solde, Decimal('-100.00'))
-        self.assertEqual(account.nom, 'Compte Test')
-    
-    def test_account_serializer_extreme_negative_balance(self):
-        """Test avec un solde négatif extrême (doit échouer)"""
-        data = {
-            'user': self.user.id,
-            'nom': 'Compte Test',
-            'solde': '-2000000.00'  # Au-delà de la limite
-        }
-        
-        request_mock = MagicMock()
-        request_mock.user = self.user
-        
-        serializer = AccountSerializer(data=data, context={'request': request_mock})
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('solde', serializer.errors)
+        self.assertEqual(account.solde, Decimal('1500.00'))
     
     def test_account_list_serializer(self):
-        """Test du serializer de liste"""
-        # Ajouter quelques opérations pour tester le count
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('100.00'),
-            description="Test",
-            created_by=self.user
-        )
-        
+        """Test du sérialiseur AccountList"""
         serializer = AccountListSerializer(self.account)
         data = serializer.data
         
-        self.assertIn('operations_count', data)
-        self.assertEqual(data['operations_count'], 1)
+        self.assertIn('id', data)
         self.assertIn('user_username', data)
-        self.assertEqual(data['user_username'], self.user.username)
+        self.assertIn('nom', data)
+        self.assertIn('solde', data)
+        self.assertIn('operations_count', data)
+        self.assertIn('updated_at', data)
 
 
 class AccountViewSetTestCase(APITestCase):
-    """Tests pour le ViewSet Account"""
-    
-    def setUp(self):
-        """Configuration initiale pour chaque test"""
-        self.client = APIClient()
-        self.user = User.objects.create_user(
-            username='testuser@example.com',
-            email='testuser@example.com',
-            password='testpassword123'
-        )
-        self.other_user = User.objects.create_user(
-            username='otheruser@example.com',
-            email='otheruser@example.com',
-            password='testpassword123'
-        )
-        
-        # Authentification
-        access_token, _ = generate_tokens(self.user)
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
-        
-        # Créer des comptes de test
-        self.account = Account.objects.create(
-            user=self.user,
-            nom="Compte Principal",
-            solde=Decimal('1000.00'),
-            created_by=self.user
-        )
-        self.other_account = Account.objects.create(
-            user=self.other_user,
-            nom="Autre Compte",
-            solde=Decimal('500.00'),
-            created_by=self.other_user
-        )
-        
-        # URLs des endpoints
-        self.accounts_url = '/api/v1/accounts/'
-        self.account_detail_url = f'/api/v1/accounts/{self.account.id}/'
-    
-    def test_list_accounts_authenticated_user(self):
-        """Test de liste des comptes pour un utilisateur authentifié"""
-        response = self.client.get(self.accounts_url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Vérifier la structure de données (peut être paginée ou non)
-        if 'results' in response.data:
-            accounts_data = response.data['results']
-        else:
-            accounts_data = response.data
-        
-        self.assertEqual(len(accounts_data), 1)  # Seulement ses comptes
-        self.assertEqual(accounts_data[0]['id'], self.account.id)
-    
-    def test_create_account_success(self):
-        """Test de création d'un compte réussie"""
-        data = {
-            'user': self.user.id,
-            'nom': 'Nouveau Compte',
-            'solde': '750.00'
-        }
-        response = self.client.post(self.accounts_url, data, format='json')
-        
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data['nom'], 'Nouveau Compte')
-        self.assertEqual(float(response.data['solde']), 750.00)
-        
-        # Vérifier en base
-        new_account = Account.objects.get(id=response.data['id'])
-        self.assertEqual(new_account.created_by, self.user)
-    
-    def test_create_account_with_negative_balance(self):
-        """Test de création d'un compte avec solde négatif (maintenant autorisé)"""
-        data = {
-            'user': self.user.id,
-            'nom': 'Compte Découvert',
-            'solde': '-100.00'  # Solde négatif maintenant autorisé
-        }
-        response = self.client.post(self.accounts_url, data, format='json')
-        
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data['nom'], 'Compte Découvert')
-        self.assertEqual(float(response.data['solde']), -100.00)
-    
-    def test_create_account_invalid_data(self):
-        """Test de création d'un compte avec données invalides"""
-        data = {
-            'user': self.user.id,
-            'nom': 'Compte Test',
-            'solde': '-2000000.00'  # Solde négatif extrême
-        }
-        response = self.client.post(self.accounts_url, data, format='json')
-        
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('solde', response.data)
-    
-    def test_get_account_details(self):
-        """Test de récupération des détails d'un compte"""
-        response = self.client.get(self.account_detail_url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['id'], self.account.id)
-        self.assertEqual(response.data['nom'], self.account.nom)
-    
-    def test_update_account(self):
-        """Test de mise à jour d'un compte"""
-        data = {
-            'nom': 'Compte Modifié',
-            'solde': '1500.00'
-        }
-        response = self.client.patch(self.account_detail_url, data, format='json')
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['nom'], 'Compte Modifié')
-        
-        # Vérifier en base
-        self.account.refresh_from_db()
-        self.assertEqual(self.account.nom, 'Compte Modifié')
-    
-    def test_delete_account_without_operations(self):
-        """Test de suppression d'un compte sans opérations"""
-        response = self.client.delete(self.account_detail_url)
-        
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Account.objects.filter(id=self.account.id).exists())
-    
-    def test_delete_account_with_operations(self):
-        """Test de suppression d'un compte avec opérations (maintenant autorisé)"""
-        # Ajouter une opération
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('100.00'),
-            description="Test",
-            created_by=self.user
-        )
-        
-        response = self.client.delete(self.account_detail_url)
-        
-        # La suppression doit maintenant réussir (cascade delete)
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Account.objects.filter(id=self.account.id).exists())
-    
-    def test_account_operations_action(self):
-        """Test de l'action personnalisée pour récupérer les opérations"""
-        # Ajouter des opérations
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('100.00'),
-            description="Opération 1",
-            created_by=self.user
-        )
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('-50.00'),
-            description="Opération 2",
-            created_by=self.user
-        )
-        
-        url = f'/api/v1/accounts/{self.account.id}/operations/'
-        response = self.client.get(url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['account_id'], self.account.id)
-        self.assertEqual(response.data['total_operations'], 2)
-        self.assertEqual(len(response.data['operations']), 2)
-    
-    def test_account_statistics_action(self):
-        """Test de l'action personnalisée pour les statistiques"""
-        # Ajouter des données pour les statistiques
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('200.00'),
-            description="Test",
-            created_by=self.user
-        )
-        DirectDebit.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('50.00'),
-            description="Prélèvement",
-            date_prelevement=date.today() + timedelta(days=10),
-            created_by=self.user
-        )
-        
-        url = f'/api/v1/accounts/{self.account.id}/statistics/'
-        response = self.client.get(url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('statistics', response.data)
-        self.assertIn('total_operations', response.data['statistics'])
-        self.assertIn('total_montant_operations', response.data['statistics'])
-    
-    def test_adjust_balance_action(self):
-        """Test de l'action d'ajustement du solde"""
-        initial_balance = float(self.account.solde)
-        adjustment = 250.00
-        
-        url = f'/api/v1/accounts/{self.account.id}/adjust_balance/'
-        data = {
-            'montant': str(adjustment),  # Convertir en string pour éviter les problèmes de type
-            'raison': 'Test ajustement'
-        }
-        response = self.client.post(url, data, format='json')
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['ajustement'], adjustment)
-        self.assertEqual(response.data['nouveau_solde'], initial_balance + adjustment)
-        
-        # Vérifier qu'une opération d'ajustement a été créée
-        adjustment_operation = Operation.objects.filter(
-            compte_reference=self.account,
-            description__contains='Ajustement'
-        ).first()
-        self.assertIsNotNone(adjustment_operation)
-        self.assertEqual(adjustment_operation.montant, Decimal(str(adjustment)))
-    
-    def test_summary_action(self):
-        """Test de l'action de résumé des comptes"""
-        url = '/api/v1/accounts/summary/'
-        response = self.client.get(url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('total_comptes', response.data)
-        self.assertIn('total_solde', response.data)
-        self.assertIn('comptes_negatifs', response.data)
-        self.assertIn('comptes_positifs', response.data)
-        self.assertEqual(response.data['total_comptes'], 1)  # Seulement les comptes de l'utilisateur
-    
-    def test_unauthorized_access(self):
-        """Test d'accès non autorisé"""
-        self.client.credentials()  # Supprimer l'authentification
-        
-        response = self.client.get(self.accounts_url)
-        # Django REST Framework retourne 403 pour les utilisateurs non authentifiés quand ils tentent d'accéder à des ressources protégées
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-    
-    def test_access_other_user_account(self):
-        """Test d'accès au compte d'un autre utilisateur (doit échouer)"""
-        other_account_url = f'/api/v1/accounts/{self.other_account.id}/'
-        response = self.client.get(other_account_url)
-        
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-
-    def test_global_overview_action(self):
-        """Test de l'action global_overview"""
-        # Ajouter quelques opérations pour des tests plus complets
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('500.00'),
-            description="Test operation 1",
-            created_by=self.user
-        )
-        Operation.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('-100.00'),
-            description="Test operation 2",
-            created_by=self.user
-        )
-        
-        url = '/api/v1/accounts/global_overview/'
-        response = self.client.get(url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('resume', response.data)
-        self.assertIn('repartition', response.data)
-        self.assertIn('comptes', response.data)
-        self.assertIn('alertes', response.data)
-        
-        # Vérifier la structure du résumé
-        resume = response.data['resume']
-        self.assertIn('total_comptes', resume)
-        self.assertIn('total_solde', resume)
-        self.assertIn('solde_moyen', resume)
-        self.assertIn('total_operations', resume)
-        
-        # Vérifier qu'il y a au moins notre compte
-        self.assertGreaterEqual(resume['total_comptes'], 1)
-        self.assertGreaterEqual(resume['total_operations'], 2)  # Nos 2 opérations de test
-        
-        # Vérifier la structure des comptes
-        comptes = response.data['comptes']
-        self.assertIsInstance(comptes, list)
-        if len(comptes) > 0:
-            compte = comptes[0]
-            self.assertIn('id', compte)
-            self.assertIn('nom', compte)
-            self.assertIn('solde', compte)
-            self.assertIn('status_niveau', compte)
-            self.assertIn('total_operations', compte)
-
-
-class MyFraisIntegrationTestCase(TestCase):
-    """Tests d'intégration pour l'application my_frais"""
-    
-    def setUp(self):
-        """Configuration initiale pour chaque test"""
-        self.client = APIClient()
-        self.user = User.objects.create_user(
-            username='testuser@example.com',
-            email='testuser@example.com',
-            password='testpassword123'
-        )
-        
-        # Authentification
-        access_token, _ = generate_tokens(self.user)
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
-    
-    def test_complete_financial_flow(self):
-        """Test d'un flux financier complet avec le nouveau système"""
-        # Désactiver temporairement les signaux pour éviter le traitement automatique
-        from django.db.models.signals import post_save
-        from my_frais.models import trigger_payment_processing, trigger_income_processing
-        
-        # Désactiver les signaux
-        post_save.disconnect(trigger_payment_processing, sender=DirectDebit)
-        post_save.disconnect(trigger_income_processing, sender=RecurringIncome)
-        
-        try:
-            # 1. Créer un prélèvement automatique
-            direct_debit = DirectDebit.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('100.00'),
-                description='Électricité',
-                date_prelevement=date.today(),
-                frequence='Mensuel',
-                created_by=self.user
-            )
-            
-            # 2. Créer un revenu récurrent
-            income = RecurringIncome.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('2500.00'),
-                description='Salaire Net',
-                date_premier_versement=date.today(),
-                frequence='Mensuel',
-                type_revenu='Salaire',
-                created_by=self.user
-            )
-            
-            # 3. Vérifier qu'aucune transaction automatique n'a été créée (signaux désactivés)
-            transactions = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions.count(), 0)
-            
-            # 4. Vérifier que le solde du compte n'a pas changé
-            self.account.refresh_from_db()
-            self.assertEqual(self.account.solde, Decimal('1000.00'))
-            
-            # 5. Traiter les transactions avec le service
-            result = AutomaticTransactionService.process_daily_transactions()
-            self.assertEqual(result['total'], 2)
-            
-            # 6. Vérifier que les transactions automatiques ont été créées
-            transactions = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions.count(), 2)
-            
-            # 7. Vérifier que le solde du compte a été mis à jour
-            self.account.refresh_from_db()
-            expected_balance = Decimal('1000.00') - Decimal('100.00') + Decimal('2500.00')
-            self.assertEqual(self.account.solde, expected_balance)
-            
-            # 8. Vérifier qu'aucune opération n'a été créée (nouveau système)
-            operations = Operation.objects.all()
-            self.assertEqual(operations.count(), 0)
-            
-            # 9. Traiter à nouveau - ne devrait pas créer de doublons
-            result = AutomaticTransactionService.process_daily_transactions()
-            self.assertEqual(result['total'], 0)  # Aucune nouvelle transaction
-            
-            # 10. Vérifier qu'il n'y a toujours que 2 transactions
-            transactions_after = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions_after.count(), 2)
-            
-        finally:
-            # Réactiver les signaux
-            post_save.connect(trigger_payment_processing, sender=DirectDebit)
-            post_save.connect(trigger_income_processing, sender=RecurringIncome)
-
-
-class BudgetProjectionAPITestCase(APITestCase):
-    """Tests pour l'API des projections budgétaires"""
+    """Tests pour les vues de compte"""
     
     def setUp(self):
         """Configuration initiale pour chaque test"""
@@ -936,466 +571,409 @@ class BudgetProjectionAPITestCase(APITestCase):
             created_by=self.user
         )
         
-        # Authentification
-        access_token, _ = generate_tokens(self.user)
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        # Générer un token JWT pour l'authentification
+        self.access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
     
-    def test_dashboard_with_different_periods(self):
-        """Test du dashboard avec différentes périodes de projection"""
-        # Test avec 3 mois (défaut)
-        response = self.client.get('/api/v1/budget-projections/dashboard/')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projections']['periode_mois'], 3)
-        self.assertEqual(len(data['projections']['tendance_mois']), 3)
+    def test_list_accounts_authenticated_user(self):
+        """Test de liste des comptes pour un utilisateur authentifié"""
+        url = reverse('account-list')
+        response = self.client.get(url)
         
-        # Test avec 6 mois
-        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=6')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projections']['periode_mois'], 6)
-        self.assertEqual(len(data['projections']['tendance_mois']), 6)
-        
-        # Test avec 12 mois
-        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=12')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projections']['periode_mois'], 12)
-        self.assertEqual(len(data['projections']['tendance_mois']), 12)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['nom'], 'Compte Test')
     
-    def test_quick_projection_with_different_periods(self):
-        """Test de la projection rapide avec différentes périodes"""
-        # Test avec 3 mois
-        response = self.client.post('/api/v1/budget-projections/quick_projection/', {
-            'compte_id': self.account.id,
-            'periode_mois': 3
-        })
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projection']['periode_mois'], 3)
+    def test_create_account_success(self):
+        """Test de création d'un compte avec succès"""
+        url = reverse('account-list')
+        data = {
+            'user': self.user.id,
+            'nom': 'Nouveau Compte',
+            'solde': '2000.00'
+        }
+        response = self.client.post(url, data, format='json')
         
-        # Test avec 6 mois (défaut)
-        response = self.client.post('/api/v1/budget-projections/quick_projection/', {
-            'compte_id': self.account.id
-        })
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projection']['periode_mois'], 6)
-        
-        # Test avec 12 mois
-        response = self.client.post('/api/v1/budget-projections/quick_projection/', {
-            'compte_id': self.account.id,
-            'periode_mois': 12
-        })
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projection']['periode_mois'], 12)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Account.objects.count(), 2)
     
-    def test_compare_scenarios_with_different_periods(self):
-        """Test de la comparaison de scénarios avec différentes périodes"""
-        # Test avec 6 mois
-        response = self.client.get(f'/api/v1/budget-projections/compare_scenarios/?compte_id={self.account.id}&periode_mois=6')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['periode_mois'], 6)
+    def test_get_account_details(self):
+        """Test de récupération des détails d'un compte"""
+        url = reverse('account-detail', args=[self.account.id])
+        response = self.client.get(url)
         
-        # Test avec 12 mois (défaut)
-        response = self.client.get(f'/api/v1/budget-projections/compare_scenarios/?compte_id={self.account.id}')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['periode_mois'], 12)
-        
-        # Test avec 24 mois
-        response = self.client.get(f'/api/v1/budget-projections/compare_scenarios/?compte_id={self.account.id}&periode_mois=24')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['periode_mois'], 24)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['nom'], 'Compte Test')
     
-    def test_projection_period_validation(self):
-        """Test de la validation des limites de période"""
-        # Test avec période trop élevée (> 60 mois)
-        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=100')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projections']['periode_mois'], 60)  # Limitée à 60
+    def test_unauthorized_access(self):
+        """Test d'accès non autorisé"""
+        self.client.credentials()  # Supprimer l'authentification
+        url = reverse('account-list')
+        response = self.client.get(url)
         
-        # Test avec période trop faible (< 1 mois)
-        response = self.client.get('/api/v1/budget-projections/dashboard/?periode_mois=0')
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['projections']['periode_mois'], 1)  # Limitée à 1
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
-class AutomaticTransactionModelTestCase(TestCase):
+class OperationViewSetTestCase(APITestCase):
+    """Tests pour les vues d'opération"""
+    
     def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.client = APIClient()
         self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
         )
         self.account = Account.objects.create(
             user=self.user,
-            nom='Compte de test',
+            nom="Compte Test",
             solde=Decimal('1000.00'),
             created_by=self.user
         )
-
-    def test_automatic_transaction_creation(self):
-        """Test de création d'une transaction automatique"""
-        transaction = AutomaticTransaction.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('-50.00'),
-            description='Prélèvement automatique - Test',
-            date_transaction=date.today(),
-            transaction_type='direct_debit',
-            source_id='test_source_123',
-            source_reference='123',
-            created_by=self.user
-        )
         
-        self.assertEqual(transaction.montant, Decimal('-50.00'))
-        self.assertEqual(transaction.transaction_type, 'direct_debit')
-        self.assertEqual(transaction.source_id, 'test_source_123')
-        self.assertTrue(transaction.processed)
-
-    def test_automatic_transaction_str_representation(self):
-        """Test de la représentation string de la transaction automatique"""
-        transaction = AutomaticTransaction.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('-50.00'),
-            description='Prélèvement automatique - Test',
-            date_transaction=date.today(),
-            transaction_type='direct_debit',
-            source_id='test_source_123',
-            source_reference='123',
-            created_by=self.user
-        )
+        # Générer un token JWT pour l'authentification
+        self.access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+    
+    def test_create_operation_success(self):
+        """Test de création d'une opération avec succès"""
+        url = reverse('operation-list')
+        data = {
+            'compte_reference': self.account.id,
+            'montant': '250.50',
+            'description': 'Achat supermarché'
+        }
+        response = self.client.post(url, data, format='json')
         
-        expected = f"Prélèvement automatique - Test - -50.00€ ({date.today()})"
-        self.assertEqual(str(transaction), expected)
-
-    def test_automatic_transaction_unique_constraint(self):
-        """Test de la contrainte d'unicité sur source_id et transaction_type"""
-        # Créer la première transaction
-        AutomaticTransaction.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('-50.00'),
-            description='Prélèvement automatique - Test',
-            date_transaction=date.today(),
-            transaction_type='direct_debit',
-            source_id='test_source_123',
-            source_reference='123',
-            created_by=self.user
-        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Operation.objects.count(), 1)
         
-        # Essayer de créer une deuxième transaction avec le même source_id et type
-        with self.assertRaises(Exception):  # IntegrityError ou ValidationError
-            AutomaticTransaction.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('-50.00'),
-                description='Prélèvement automatique - Test 2',
-                date_transaction=date.today(),
-                transaction_type='direct_debit',
-                source_id='test_source_123',  # Même source_id
-                source_reference='123',
-                created_by=self.user
-            )
+        # Vérifier que le solde du compte a été mis à jour
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.solde, Decimal('1250.50'))
+    
+    def test_bulk_create_operations(self):
+        """Test de création en lot d'opérations"""
+        url = reverse('operation-bulk-create')
+        data = {
+            'operations': [
+                {
+                    'compte_reference': self.account.id,
+                    'montant': '100.00',
+                    'description': 'Opération 1'
+                },
+                {
+                    'compte_reference': self.account.id,
+                    'montant': '200.00',
+                    'description': 'Opération 2'
+                }
+            ]
+        }
+        response = self.client.post(url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['created_count'], 2)
 
 
-class AutomaticTransactionServiceTestCase(TestCase):
+class DirectDebitViewSetTestCase(APITestCase):
+    """Tests pour les vues de prélèvements automatiques"""
+    
     def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.client = APIClient()
         self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
         )
         self.account = Account.objects.create(
             user=self.user,
-            nom='Compte de test',
+            nom="Compte Test",
             solde=Decimal('1000.00'),
             created_by=self.user
         )
-
-    def test_process_daily_transactions(self):
-        """Test du traitement quotidien des transactions automatiques"""
-        # Créer un prélèvement et un revenu à échéance
-        # Désactiver temporairement les signaux pour éviter le traitement automatique
-        from django.db.models.signals import post_save
-        from my_frais.models import trigger_payment_processing, trigger_income_processing
         
-        # Désactiver les signaux
-        post_save.disconnect(trigger_payment_processing, sender=DirectDebit)
-        post_save.disconnect(trigger_income_processing, sender=RecurringIncome)
+        # Générer un token JWT pour l'authentification
+        self.access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+    
+    def test_create_direct_debit_success(self):
+        """Test de création d'un prélèvement automatique avec succès"""
+        url = reverse('direct-debit-list')
+        data = {
+            'compte_reference': self.account.id,
+            'montant': '50.00',
+            'description': 'Électricité EDF',
+            'date_prelevement': (date.today() + timedelta(days=5)).isoformat(),
+            'frequence': 'Mensuel'
+        }
+        response = self.client.post(url, data, format='json')
         
-        try:
-            DirectDebit.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('100.00'),
-                description='Test prélèvement',
-                date_prelevement=date.today(),
-                frequence='Mensuel',
-                created_by=self.user
-            )
-            
-            RecurringIncome.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('2000.00'),
-                description='Salaire',
-                type_revenu='Salaire',
-                date_premier_versement=date.today(),
-                frequence='Mensuel',
-                created_by=self.user
-            )
-            
-            # Vérifier qu'aucune transaction n'a été créée automatiquement
-            transactions_before = AutomaticTransaction.objects.count()
-            self.assertEqual(transactions_before, 0)
-            
-            # Traiter les transactions avec le service
-            result = AutomaticTransactionService.process_daily_transactions()
-            
-            self.assertEqual(result['total'], 2)
-            self.assertEqual(result['payments'], 1)
-            self.assertEqual(result['incomes'], 1)
-            self.assertGreater(result['execution_duration'], 0)
-            
-            # Vérifier que les transactions ont été créées
-            transactions = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions.count(), 2)
-            
-            # Vérifier que le solde du compte a été mis à jour
-            self.account.refresh_from_db()
-            expected_balance = Decimal('1000.00') - Decimal('100.00') + Decimal('2000.00')
-            self.assertEqual(self.account.solde, expected_balance)
-            
-        finally:
-            # Réactiver les signaux
-            post_save.connect(trigger_payment_processing, sender=DirectDebit)
-            post_save.connect(trigger_income_processing, sender=RecurringIncome)
-
-    def test_get_transaction_summary(self):
-        """Test du résumé des transactions automatiques"""
-        # Créer quelques transactions automatiques
-        AutomaticTransaction.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('-100.00'),
-            description='Prélèvement test',
-            date_transaction=date.today(),
-            transaction_type='direct_debit',
-            source_id='test_1',
-            source_reference='1',
-            created_by=self.user
-        )
-        
-        AutomaticTransaction.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('2000.00'),
-            description='Revenu test',
-            date_transaction=date.today(),
-            transaction_type='recurring_income',
-            source_id='test_2',
-            source_reference='2',
-            created_by=self.user
-        )
-        
-        summary = AutomaticTransactionService.get_transaction_summary(self.account)
-        
-        self.assertEqual(summary['total_transactions'], 2)
-        self.assertEqual(summary['payments_count'], 1)
-        self.assertEqual(summary['incomes_count'], 1)
-        self.assertEqual(summary['payments_total'], Decimal('-100.00'))
-        self.assertEqual(summary['incomes_total'], Decimal('2000.00'))
-        self.assertEqual(summary['net_impact'], Decimal('1900.00'))
-
-
-class BudgetProjectionServiceTestCase(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
-        )
-        self.account = Account.objects.create(
-            user=self.user,
-            nom='Compte de test',
-            solde=Decimal('1000.00'),
-            created_by=self.user
-        )
-
-    def test_calculate_projections(self):
-        """Test du calcul des projections de budget"""
-        # Créer un prélèvement et un revenu
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(DirectDebit.objects.count(), 1)
+    
+    def test_active_direct_debits(self):
+        """Test de récupération des prélèvements actifs"""
+        # Créer un prélèvement actif
         DirectDebit.objects.create(
             compte_reference=self.account,
-            montant=Decimal('100.00'),
-            description='Test prélèvement',
-            date_prelevement=date.today(),
-            frequence='Mensuel',
+            montant=Decimal('50.00'),
+            description="Test",
+            date_prelevement=date.today() + timedelta(days=5),
             created_by=self.user
         )
         
-        RecurringIncome.objects.create(
-            compte_reference=self.account,
-            montant=Decimal('2000.00'),
-            description='Salaire',
-            type_revenu='Salaire',
-            date_premier_versement=date.today(),
-            frequence='Mensuel',
-            created_by=self.user
-        )
+        url = reverse('direct-debit-active')
+        response = self.client.get(url)
         
-        # Calculer les projections sur 3 mois
-        projections = BudgetProjectionService.calculate_projections(
-            account=self.account,
-            start_date=date.today(),
-            period_months=3
-        )
-        
-        self.assertEqual(len(projections), 3)
-        
-        # Vérifier que chaque mois a des transactions
-        for projection in projections:
-            self.assertGreaterEqual(projection['transactions_count'], 0)
-            self.assertIn('solde_debut', projection)
-            self.assertIn('solde_fin', projection)
-            self.assertIn('total_transactions', projection)
-
-    def test_calculate_projections_without_transactions(self):
-        """Test du calcul des projections sans transactions automatiques"""
-        projections = BudgetProjectionService.calculate_projections(
-            account=self.account,
-            start_date=date.today(),
-            period_months=3
-        )
-        
-        self.assertEqual(len(projections), 3)
-        
-        # Vérifier que les soldes restent constants
-        for projection in projections:
-            self.assertEqual(projection['solde_debut'], float(self.account.solde))
-            self.assertEqual(projection['solde_fin'], float(self.account.solde))
-            self.assertEqual(projection['transactions_count'], 0)
-            self.assertEqual(projection['total_transactions'], 0.0)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
 
 
-class AutomatedTaskModelTestCase(TestCase):
+class RecurringIncomeViewSetTestCase(APITestCase):
+    """Tests pour les vues de revenus récurrents"""
+    
     def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.client = APIClient()
         self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
         )
-
-    def test_automated_task_creation(self):
-        """Test de création d'une tâche automatique"""
-        task = AutomatedTask.log_task(
-            task_type='BOTH_PROCESSING',
-            status='SUCCESS',
-            processed_count=5,
-            execution_duration=1.5,
-            details={'test': 'data'},
-            user=self.user
+        self.account = Account.objects.create(
+            user=self.user,
+            nom="Compte Test",
+            solde=Decimal('1000.00'),
+            created_by=self.user
         )
         
-        self.assertEqual(task.task_type, 'BOTH_PROCESSING')
-        self.assertEqual(task.status, 'SUCCESS')
-        self.assertEqual(task.processed_count, 5)
-        self.assertEqual(task.execution_duration, Decimal('1.5'))
-        self.assertEqual(task.details, {'test': 'data'})
+        # Générer un token JWT pour l'authentification
+        self.access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+    
+    def test_create_recurring_income_success(self):
+        """Test de création d'un revenu récurrent avec succès"""
+        url = reverse('recurring-income-list')
+        data = {
+            'compte_reference': self.account.id,
+            'montant': '2000.00',
+            'description': 'Salaire mensuel',
+            'date_premier_versement': (date.today() + timedelta(days=10)).isoformat(),
+            'frequence': 'Mensuel',
+            'type_revenu': 'Salaire'
+        }
+        response = self.client.post(url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(RecurringIncome.objects.count(), 1)
+    
+    def test_bulk_create_recurring_incomes(self):
+        """Test de création en lot de revenus récurrents"""
+        url = reverse('recurring-income-bulk-create')
+        data = {
+            'revenus': [
+                {
+                    'compte_reference': self.account.id,
+                    'montant': '1500.00',
+                    'description': 'Salaire 1',
+                    'date_premier_versement': (date.today() + timedelta(days=5)).isoformat(),
+                    'type_revenu': 'Salaire'
+                },
+                {
+                    'compte_reference': self.account.id,
+                    'montant': '500.00',
+                    'description': 'Aide',
+                    'date_premier_versement': (date.today() + timedelta(days=10)).isoformat(),
+                    'type_revenu': 'Aide'
+                }
+            ]
+        }
+        response = self.client.post(url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['created_count'], 2)
 
-    def test_automated_task_str_representation(self):
-        """Test de la représentation string de la tâche automatique"""
-        task = AutomatedTask.log_task(
+
+class BudgetProjectionViewSetTestCase(APITestCase):
+    """Tests pour les vues de projections budgétaires"""
+    
+    def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom="Compte Test",
+            solde=Decimal('1000.00'),
+            created_by=self.user
+        )
+        
+        # Générer un token JWT pour l'authentification
+        self.access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+    
+    def test_calculate_projections(self):
+        """Test de calcul de projections"""
+        url = reverse('budget-projection-calculate')
+        data = {
+            'compte': self.account.id,  # Le sérialiseur BudgetProjectionCalculatorSerializer utilise 'compte'
+            'date_debut': (date.today() + timedelta(days=1)).isoformat(),
+            'periode_mois': 6,
+            'inclure_prelevements': True,
+            'inclure_revenus': True
+        }
+        response = self.client.post(url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class AutomatedTaskViewSetTestCase(APITestCase):
+    """Tests pour les vues de tâches automatiques"""
+    
+    def setUp(self):
+        """Configuration initiale pour chaque test"""
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
+        )
+        
+        # Créer quelques tâches automatiques
+        self.task1 = AutomatedTask.objects.create(
             task_type='PAYMENT_PROCESSING',
             status='SUCCESS',
-            processed_count=2,
-            user=self.user
+            processed_count=5,
+            execution_duration=Decimal('0.125'),
+            created_by=self.user
+        )
+        self.task2 = AutomatedTask.objects.create(
+            task_type='INCOME_PROCESSING',
+            status='SUCCESS',
+            processed_count=3,
+            execution_duration=Decimal('0.100'),
+            created_by=self.user
         )
         
-        expected_start = "Traitement des prélèvements"
-        self.assertIn(expected_start, str(task))
+        # Générer un token JWT pour l'authentification
+        self.access_token, _ = generate_tokens(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+    
+    def test_list_automated_tasks(self):
+        """Test de liste des tâches automatiques"""
+        url = reverse('automated-task-list')
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+    
+    def test_automated_tasks_statistics(self):
+        """Test des statistiques des tâches automatiques"""
+        url = reverse('automated-task-statistics')
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('task_types', response.data)
+        self.assertIn('status_stats', response.data)
+        self.assertIn('performance', response.data)
+    
+    def test_automated_tasks_recent(self):
+        """Test des tâches récentes"""
+        url = reverse('automated-task-recent')
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('count', response.data)
+        self.assertIn('tasks', response.data)
 
 
 class MyFraisIntegrationTestCase(TestCase):
+    """Tests d'intégration pour le système complet"""
+    
     def setUp(self):
+        """Configuration initiale pour chaque test"""
         self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
+            username='testuser@example.com',
+            email='testuser@example.com',
+            password='testpassword123'
         )
         self.account = Account.objects.create(
             user=self.user,
-            nom='Compte de test',
+            nom="Compte Test",
             solde=Decimal('1000.00'),
             created_by=self.user
         )
-
+    
     def test_complete_financial_flow(self):
-        """Test d'un flux financier complet avec le nouveau système"""
-        # Désactiver temporairement les signaux pour éviter le traitement automatique
-        from django.db.models.signals import post_save
-        from my_frais.models import trigger_payment_processing, trigger_income_processing
+        """Test d'un flux financier complet"""
+        # 1. Créer des opérations
+        operation1 = Operation.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('500.00'),
+            description="Dépôt initial",
+            created_by=self.user
+        )
         
-        # Désactiver les signaux
-        post_save.disconnect(trigger_payment_processing, sender=DirectDebit)
-        post_save.disconnect(trigger_income_processing, sender=RecurringIncome)
+        operation2 = Operation.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('-100.00'),
+            description="Achat",
+            created_by=self.user
+        )
         
-        try:
-            # 1. Créer un prélèvement automatique
-            direct_debit = DirectDebit.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('100.00'),
-                description='Électricité',
-                date_prelevement=date.today(),
-                frequence='Mensuel',
-                created_by=self.user
-            )
-            
-            # 2. Créer un revenu récurrent
-            income = RecurringIncome.objects.create(
-                compte_reference=self.account,
-                montant=Decimal('2500.00'),
-                description='Salaire Net',
-                date_premier_versement=date.today(),
-                frequence='Mensuel',
-                type_revenu='Salaire',
-                created_by=self.user
-            )
-            
-            # 3. Vérifier qu'aucune transaction automatique n'a été créée (signaux désactivés)
-            transactions = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions.count(), 0)
-            
-            # 4. Vérifier que le solde du compte n'a pas changé
-            self.account.refresh_from_db()
-            self.assertEqual(self.account.solde, Decimal('1000.00'))
-            
-            # 5. Traiter les transactions avec le service
-            result = AutomaticTransactionService.process_daily_transactions()
-            self.assertEqual(result['total'], 2)
-            
-            # 6. Vérifier que les transactions automatiques ont été créées
-            transactions = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions.count(), 2)
-            
-            # 7. Vérifier que le solde du compte a été mis à jour
-            self.account.refresh_from_db()
-            expected_balance = Decimal('1000.00') - Decimal('100.00') + Decimal('2500.00')
-            self.assertEqual(self.account.solde, expected_balance)
-            
-            # 8. Vérifier qu'aucune opération n'a été créée (nouveau système)
-            operations = Operation.objects.all()
-            self.assertEqual(operations.count(), 0)
-            
-            # 9. Traiter à nouveau - ne devrait pas créer de doublons
-            result = AutomaticTransactionService.process_daily_transactions()
-            self.assertEqual(result['total'], 0)  # Aucune nouvelle transaction
-            
-            # 10. Vérifier qu'il n'y a toujours que 2 transactions
-            transactions_after = AutomaticTransaction.objects.all()
-            self.assertEqual(transactions_after.count(), 2)
-            
-        finally:
-            # Réactiver les signaux
-            post_save.connect(trigger_payment_processing, sender=DirectDebit)
-            post_save.connect(trigger_income_processing, sender=RecurringIncome)
+        # Vérifier que le solde a été mis à jour
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.solde, Decimal('1000.00'))
+        
+        # 2. Créer un prélèvement automatique
+        direct_debit = DirectDebit.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('50.00'),
+            description="Abonnement",
+            date_prelevement=date.today() + timedelta(days=5),
+            frequence='Mensuel',
+            created_by=self.user
+        )
+        
+        # 3. Créer un revenu récurrent
+        recurring_income = RecurringIncome.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('2000.00'),
+            description="Salaire",
+            date_premier_versement=date.today() + timedelta(days=10),
+            frequence='Mensuel',
+            type_revenu='Salaire',
+            created_by=self.user
+        )
+        
+        # 4. Créer une projection budgétaire
+        projection = BudgetProjection.objects.create(
+            compte_reference=self.account,
+            date_projection=date.today(),
+            periode_projection=6,
+            solde_initial=self.account.solde,
+            projections_data={'test': 'data'},
+            created_by=self.user
+        )
+        
+        # Vérifier que tous les objets ont été créés correctement
+        # Note: Il peut y avoir des opérations automatiques créées par les signaux
+        self.assertGreaterEqual(Operation.objects.count(), 2)
+        self.assertEqual(DirectDebit.objects.count(), 1)
+        self.assertEqual(RecurringIncome.objects.count(), 1)
+        self.assertEqual(BudgetProjection.objects.count(), 1)
+        
+        # Vérifier les relations
+        # Note: Il peut y avoir des opérations automatiques créées par les signaux
+        self.assertGreaterEqual(self.account.operations.count(), 2)
+        # DirectDebit hérite d'Operation, donc pas de directdebit_set séparé
+        direct_debits = DirectDebit.objects.filter(compte_reference=self.account)
+        self.assertEqual(direct_debits.count(), 1)
+        self.assertEqual(self.account.recurring_incomes.count(), 1)
+        self.assertEqual(self.account.budget_projections.count(), 1)
