@@ -281,17 +281,10 @@ jobs:
             python manage.py migrate --noinput
             python manage.py collectstatic --noinput
             
-            # Créer un script temporaire pour le redémarrage
-            cat > /tmp/restart_service.sh << 'SCRIPT_EOF'
-            #!/bin/bash
+            # Redémarrer le service directement
             echo "${{ secrets.SUDO_PASSWORD }}" | sudo -S /usr/bin/systemctl restart ${{ secrets.SERVICE_NAME }}
             sleep 5
             echo "${{ secrets.SUDO_PASSWORD }}" | sudo -S /usr/bin/systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
-            SCRIPT_EOF
-                      
-            chmod +x /tmp/restart_service.sh
-            /tmp/restart_service.sh
-            rm /tmp/restart_service.sh
           EOF
 
   # Job 4: Notification du déploiement (optionnel)
