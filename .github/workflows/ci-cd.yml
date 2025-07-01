@@ -260,6 +260,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Debug SSH variables
+        run: |
+          echo "SERVER_USER: $SERVER_USER"
+          echo "SERVER_IP: $SERVER_IP"
+          echo "PROJECT_PATH: ${{ secrets.PROJECT_PATH }}"
+          echo "VENV_PATH: ${{ secrets.VENV_PATH }}"
+          echo "SERVICE_NAME: ${{ secrets.SERVICE_NAME }}"
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+
       - name: Deploy to server
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
