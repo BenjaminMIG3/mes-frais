@@ -291,7 +291,9 @@ jobs:
             python manage.py migrate --noinput
             python manage.py collectstatic --noinput
             # Utilisation de sudo -S pour fournir le mot de passe si nécessaire
-            echo ${{ secrets.SUDO_PASSWORD }} | sudo -S systemctl restart ${{ secrets.SERVICE_NAME }}
+            # On définit le mot de passe comme variable d'environnement pour éviter les problèmes d'échappement
+            SUDO_PASS=${{ secrets.SUDO_PASSWORD }}
+            echo "$SUDO_PASS" | sudo -S systemctl restart ${{ secrets.SERVICE_NAME }}
             
             # Vérification que le service a bien redémarré
             sleep 5
