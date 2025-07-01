@@ -2,19 +2,21 @@ asgiref==3.8.1
 cffi==1.17.1
 cryptography==42.0.5
 Django==5.2.3
+django-cors-headers==4.3.1
+django-extensions==4.1
 django-filter==24.1
 djangorestframework==3.16.0
+dnspython==2.6.1
 dotenv==0.9.9
+gunicorn==23.0.0
 mimesis==13.1.0
 mysqlclient==2.2.7
 packaging==25.0
 pycparser==2.22
 PyJWT==2.10.1
+pymongo==4.6.1
 python-dateutil==2.9.0
 python-dotenv==1.1.1
 setuptools==80.9.0
 six==1.17.0
 sqlparse==0.5.3
-# MongoDB et logging
-pymongo==4.6.1
-dnspython==2.6.1
