@@ -1,0 +1,72 @@
+name: Django CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Étape 1 : Cloner le dépôt
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Étape 2 : Configurer Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Étape 3 : Créer et activer un virtualenv
+      - name: Create and activate virtualenv
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+
+      # Étape 4 : Installer les dépendances
+      - name: Install dependencies
+        run: |
+          source venv/bin/activate
+          pip install -r requirements.txt
+
+      # Étape 5 : Exécuter les tests unitaires
+      - name: Run tests
+        run: |
+          source venv/bin/activate
+          python manage.py test
+
+      # Étape 6 : Collecter les fichiers statiques
+      - name: Collect static files
+        run: |
+          source venv/bin/activate
+          python manage.py collectstatic --noinput
+
+      # Étape 7 : Déployer sur le serveur (uniquement sur push)
+      - name: Deploy to server
+        if: github.event_name == 'push'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
+            cd ${{ secrets.PROJECT_PATH }}
+            git pull origin main
+            source ${{ secrets.VENV_PATH }}/bin/activate
+            pip install -r requirements.txt
+            python manage.py migrate --noinput
+            python manage.py collectstatic --noinput
+            sudo systemctl restart ${{ secrets.SERVICE_NAME }}
+          EOF
