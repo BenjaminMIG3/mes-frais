@@ -287,20 +287,209 @@ jobs:
             echo "${{ secrets.SUDO_PASSWORD }}" | sudo -S /usr/bin/systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
           EOF
 
-  # Job 4: Notification du déploiement (optionnel)
+  # Job 4: Notification complète du pipeline CI/CD
   notify:
     runs-on: ubuntu-latest
-    name: Notification de Déploiement
-    needs: [deploy]
+    name: Notification du Pipeline CI/CD
+    needs: [test, build, deploy]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Notify deployment status
+      - name: Generate notification content
+        id: notification
         run: |
-          if [ "${{ needs.deploy.result }}" == "success" ]; then
-            echo "✅ Déploiement réussi !"
-            echo "L'application a été mise à jour avec succès."
+          # Générer le contenu de la notification
+          NOTIFICATION_CONTENT="🚀 === RAPPORT DU PIPELINE CI/CD ===
+          📋 Commit: ${{ github.sha }}
+          👤 Auteur: ${{ github.actor }}
+          📅 Date: $(date '+%Y-%m-%d %H:%M:%S UTC')
+          
+          "
+          
+          # Statut des tests
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            NOTIFICATION_CONTENT+="✅ TESTS: Réussis
+            - Tous les tests unitaires ont passé
+            - Qualité du code validée
+            "
+          elif [ "${{ needs.test.result }}" == "failure" ]; then
+            NOTIFICATION_CONTENT+="❌ TESTS: Échec
+            - Certains tests ont échoué
+            - Vérifiez les logs des tests
+            "
+          elif [ "${{ needs.test.result }}" == "cancelled" ]; then
+            NOTIFICATION_CONTENT+="⚠️  TESTS: Annulés
+            - Les tests ont été annulés
+            "
           else
-            echo "❌ Échec du déploiement !"
-            echo "Veuillez vérifier les logs pour plus de détails."
+            NOTIFICATION_CONTENT+="❓ TESTS: Statut inconnu (${{ needs.test.result }})
+            "
           fi
+          
+          # Statut du build
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            NOTIFICATION_CONTENT+="✅ BUILD: Réussi
+            - Assets collectés avec succès
+            - Application prête pour le déploiement
+            "
+          elif [ "${{ needs.build.result }}" == "failure" ]; then
+            NOTIFICATION_CONTENT+="❌ BUILD: Échec
+            - Erreur lors de la collecte des assets
+            - Vérifiez les logs du build
+            "
+          elif [ "${{ needs.build.result }}" == "cancelled" ]; then
+            NOTIFICATION_CONTENT+="⚠️  BUILD: Annulé
+            - Le build a été annulé
+            "
+          else
+            NOTIFICATION_CONTENT+="❓ BUILD: Statut inconnu (${{ needs.build.result }})
+            "
+          fi
+          
+          # Statut du déploiement
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            NOTIFICATION_CONTENT+="✅ DÉPLOIEMENT: Réussi
+            - Application déployée en production
+            - Service redémarré avec succès
+            - Mise à jour terminée
+            "
+          elif [ "${{ needs.deploy.result }}" == "failure" ]; then
+            NOTIFICATION_CONTENT+="❌ DÉPLOIEMENT: Échec
+            - Erreur lors du déploiement
+            - Vérifiez les logs de déploiement
+            "
+          elif [ "${{ needs.deploy.result }}" == "cancelled" ]; then
+            NOTIFICATION_CONTENT+="⚠️  DÉPLOIEMENT: Annulé
+            - Le déploiement a été annulé
+            "
+          else
+            NOTIFICATION_CONTENT+="❓ DÉPLOIEMENT: Statut inconnu (${{ needs.deploy.result }})
+            "
+          fi
+          
+          # Résumé global
+          if [ "${{ needs.test.result }}" == "success" ] && [ "${{ needs.build.result }}" == "success" ] && [ "${{ needs.deploy.result }}" == "success" ]; then
+            NOTIFICATION_CONTENT+="🎉 === DÉPLOIEMENT COMPLET RÉUSSI ===
+            Tous les étapes du pipeline ont été exécutées avec succès !
+            L'application est maintenant en production.
+            "
+            SUBJECT="✅ Déploiement réussi - Mes Frais"
+          else
+            NOTIFICATION_CONTENT+="⚠️  === PROBLÈME DÉTECTÉ ===
+            Au moins une étape du pipeline a échoué.
+            Vérifiez les logs pour plus de détails.
+            "
+            SUBJECT="❌ Échec du pipeline CI/CD - Mes Frais"
+          fi
+          
+          NOTIFICATION_CONTENT+="
+          🔗 Voir les détails: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          # Sauvegarder dans des variables d'output
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTIFICATION_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+          
+          # Afficher dans les logs aussi
+          echo "$NOTIFICATION_CONTENT"
+
+      - name: Create deployment status comment
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: commits } = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              per_page: 1
+            });
+            
+            const commit = commits[0];
+            const status = '${{ needs.test.result }}' === 'success' && 
+                          '${{ needs.build.result }}' === 'success' && 
+                          '${{ needs.deploy.result }}' === 'success' ? '✅' : '❌';
+            
+            const subject = '${{ steps.notification.outputs.subject }}';
+            const content = `${{ steps.notification.outputs.content }}`;
+            
+            const comment = `## ${subject}
+
+            ${content}
+
+            ---
+            *Notification automatique du pipeline CI/CD*`;
+            
+            try {
+              await github.rest.repos.createCommitComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+                body: comment
+              });
+              console.log('✅ Commentaire de statut ajouté au commit');
+            } catch (error) {
+              console.log('⚠️ Impossible d\'ajouter le commentaire:', error.message);
+            }
+
+      - name: Create deployment summary
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isSuccess = '${{ needs.test.result }}' === 'success' && 
+                             '${{ needs.build.result }}' === 'success' && 
+                             '${{ needs.deploy.result }}' === 'success';
+            
+            const summary = `## 🚀 Résumé du Déploiement
+
+            **Statut:** ${isSuccess ? '✅ Succès' : '❌ Échec'}
+            **Commit:** \`${{ github.sha }}\`
+            **Auteur:** ${{ github.actor }}
+            **Date:** ${new Date().toLocaleString('fr-FR')}
+
+            ### 📊 Détails des étapes:
+            - **Tests:** ${{ needs.test.result == 'success' && '✅' || '❌' }} ${{ needs.test.result }}
+            - **Build:** ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }}
+            - **Déploiement:** ${{ needs.deploy.result == 'success' && '✅' || '❌' }} ${{ needs.deploy.result }}
+
+            🔗 [Voir les logs complets](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            `;
+            
+            try {
+              // Créer un commentaire sur le commit
+              await github.rest.repos.createCommitComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+                body: summary
+              });
+              
+              // Si c'est un succès, créer aussi un commentaire sur le dernier commit
+              if (isSuccess) {
+                console.log('🎉 Déploiement réussi - Notification ajoutée au commit');
+              } else {
+                console.log('⚠️ Déploiement échoué - Notification d\'erreur ajoutée');
+              }
+            } catch (error) {
+              console.log('⚠️ Erreur lors de l\'ajout du commentaire:', error.message);
+            }
+
+      - name: Log notification status
+        if: always()
+        run: |
+          echo "📧 === STATUT DES NOTIFICATIONS ==="
+          echo "✅ Notifications GitHub natives activées"
+          echo "   - Commentaires sur les commits"
+          echo "   - Résumés de déploiement"
+          echo "   - Logs détaillés dans GitHub Actions"
+          
+          if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "✅ Commentaire de statut ajouté au commit"
+          else
+            echo "ℹ️  Commentaire de commit non ajouté (pas un push sur main)"
+          fi
+          
+          echo ""
+          echo "🔗 Voir les détails: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
