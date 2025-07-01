@@ -10,190 +10,190 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Job 1: Tests unitaires et de qualité - Commenté temporairement pour résoudre le problème de mot de passe
-  # test:
-  #   runs-on: ubuntu-latest
-  #   name: Tests et Qualité du Code
+  # Job 1: Tests unitaires et de qualité
+  test:
+    runs-on: ubuntu-latest
+    name: Tests et Qualité du Code
 
-  #   services:
-  #     mysql:
-  #       image: mysql:8.0
-  #       env:
-  #         MYSQL_ROOT_PASSWORD: root_password
-  #         MYSQL_DATABASE: mes_frais
-  #         MYSQL_USER: test_user
-  #         MYSQL_PASSWORD: test_password
-  #       ports:
-  #         - 3306:3306
-  #       options: >-
-  #         --health-cmd="mysqladmin ping -h localhost -u test_user -ptest_password --protocol=tcp"
-  #         --health-interval=10s
-  #         --health-timeout=5s
-  #         --health-retries=5
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: mes_frais
+          MYSQL_USER: test_user
+          MYSQL_PASSWORD: test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u test_user -ptest_password --protocol=tcp"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
-  #     mongodb:
-  #       image: mongo:5.0
-  #       env:
-  #         MONGO_INITDB_ROOT_USERNAME: test_user
-  #         MONGO_INITDB_ROOT_PASSWORD: test_password
-  #         MONGO_INITDB_DATABASE: mes_frais_logs
-  #       ports:
-  #         - 27017:27017
-  #       options: >-
-  #         --health-cmd="mongosh --eval 'db.runCommand({ping: 1})'"
-  #         --health-interval=10s
-  #         --health-timeout=5s
-  #         --health-retries=3
+      mongodb:
+        image: mongo:5.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: test_user
+          MONGO_INITDB_ROOT_PASSWORD: test_password
+          MONGO_INITDB_DATABASE: mes_frais_logs
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd="mongosh --eval 'db.runCommand({ping: 1})'"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
 
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-  #     - name: Cache pip
-  #       uses: actions/cache@v3
-  #       with:
-  #         path: ~/.cache/pip
-  #         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-  #         restore-keys: |
-  #           ${{ runner.os }}-pip-
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-  #     - name: Install system dependencies
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y mysql-client
-  #         # Installation de pymongo pour les tests de connectivité
-  #         python3 -m pip install --user pymongo
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+          # Installation de pymongo pour les tests de connectivité
+          python3 -m pip install --user pymongo
 
-  #     - name: Create and activate virtualenv
-  #       run: |
-  #         python -m venv venv
-  #         source venv/bin/activate
-  #         pip install --upgrade pip
+      - name: Create and activate virtualenv
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
 
-  #     - name: Install dependencies
-  #       run: |
-  #         source venv/bin/activate
-  #         pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          source venv/bin/activate
+          pip install -r requirements.txt
 
-  #     - name: Wait for services to be ready
-  #       run: |
-  #         echo "Attente que les services soient prêts..."
-  #         
-  #         # Attendre MySQL
-  #         echo "Test de connexion MySQL..."
-  #         for i in {1..30}; do
-  #           if mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "SELECT 1;" 2>/dev/null; then
-  #             echo "✅ MySQL est prêt !"
-  #             break
-  #           fi
-  #           echo "⏳ Attente MySQL... ($i/30)"
-  #           sleep 2
-  #         done
-  #         
-  #         # Attendre MongoDB (test avec Python/pymongo)
-  #         echo "Test de connexion MongoDB..."
-  #         for i in {1..20}; do
-  #           if python3 -c "import pymongo; pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=2000).admin.command('ping')" 2>/dev/null; then
-  #             echo "✅ MongoDB est prêt !"
-  #             break
-  #           fi
-  #           echo "⏳ Attente MongoDB... ($i/20)"
-  #           sleep 3
-  #         done
+      - name: Wait for services to be ready
+        run: |
+          echo "Attente que les services soient prêts..."
+          
+          # Attendre MySQL
+          echo "Test de connexion MySQL..."
+          for i in {1..30}; do
+            if mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "SELECT 1;" 2>/dev/null; then
+              echo "✅ MySQL est prêt !"
+              break
+            fi
+            echo "⏳ Attente MySQL... ($i/30)"
+            sleep 2
+          done
+          
+          # Attendre MongoDB (test avec Python/pymongo)
+          echo "Test de connexion MongoDB..."
+          for i in {1..20}; do
+            if python3 -c "import pymongo; pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=2000).admin.command('ping')" 2>/dev/null; then
+              echo "✅ MongoDB est prêt !"
+              break
+            fi
+            echo "⏳ Attente MongoDB... ($i/20)"
+            sleep 3
+          done
 
-  #     - name: Check services
-  #       run: |
-  #         echo "Vérification finale des services..."
-  #         netstat -tuln | grep :3306 || echo "MySQL port non trouvé"
-  #         netstat -tuln | grep :27017 || echo "MongoDB port non trouvé"
-  #         mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "SELECT 'MySQL OK';"
-  #         python3 -c "import pymongo; print('MongoDB OK:', pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=2000).admin.command('ping'))"
+      - name: Check services
+        run: |
+          echo "Vérification finale des services..."
+          netstat -tuln | grep :3306 || echo "MySQL port non trouvé"
+          netstat -tuln | grep :27017 || echo "MongoDB port non trouvé"
+          mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "SELECT 'MySQL OK';"
+          python3 -c "import pymongo; print('MongoDB OK:', pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=2000).admin.command('ping'))"
 
-  #     - name: Setup MySQL permissions for tests
-  #       run: |
-  #         echo "Configuration des permissions MySQL pour les tests..."
-  #         # Connexion en tant que root pour accorder les permissions
-  #         mysql -h 127.0.0.1 -P 3306 -u root -proot_password << 'EOF'
-  #         GRANT ALL PRIVILEGES ON *.* TO 'test_user'@'%' WITH GRANT OPTION;
-  #         GRANT CREATE ON *.* TO 'test_user'@'%';
-  #         GRANT DROP ON *.* TO 'test_user'@'%';
-  #         FLUSH PRIVILEGES;
-  #         SHOW GRANTS FOR 'test_user'@'%';
-  #         EOF
-  #         
-  #         echo "Test de création de base de données par test_user:"
-  #         mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "CREATE DATABASE IF NOT EXISTS test_verification; DROP DATABASE test_verification; SELECT 'Permissions OK' AS status;"
+      - name: Setup MySQL permissions for tests
+        run: |
+          echo "Configuration des permissions MySQL pour les tests..."
+          # Connexion en tant que root pour accorder les permissions
+          mysql -h 127.0.0.1 -P 3306 -u root -proot_password << 'EOF'
+          GRANT ALL PRIVILEGES ON *.* TO 'test_user'@'%' WITH GRANT OPTION;
+          GRANT CREATE ON *.* TO 'test_user'@'%';
+          GRANT DROP ON *.* TO 'test_user'@'%';
+          FLUSH PRIVILEGES;
+          SHOW GRANTS FOR 'test_user'@'%';
+          EOF
+          
+          echo "Test de création de base de données par test_user:"
+          mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "CREATE DATABASE IF NOT EXISTS test_verification; DROP DATABASE test_verification; SELECT 'Permissions OK' AS status;"
 
-  #     - name: Debug database connection
-  #       env:
-  #         SECRET_KEY: test-secret-key-for-github-actions
-  #         DB_NAME: mes_frais
-  #         DB_USER: test_user
-  #         DB_PASSWORD: test_password
-  #         DB_HOST: 127.0.0.1
-  #         DB_PORT: 3306
-  #         MONGODB_HOST: 127.0.0.1
-  #         MONGODB_PORT: 27017
-  #         MONGODB_DATABASE: mes_frais_logs
-  #         MONGODB_USERNAME: test_user
-  #         MONGODB_PASSWORD: test_password
-  #         MONGODB_AUTH_SOURCE: admin
-  #       run: |
-  #         echo "Variables d'environnement pour Django:"
-  #         echo "DB_HOST: $DB_HOST"
-  #         echo "DB_PORT: $DB_PORT"
-  #         echo "DB_NAME: $DB_NAME"
-  #         echo "DB_USER: $DB_USER"
-  #         
-  #         echo "Test final de connectivité MySQL avec les mêmes paramètres:"
-  #         mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD -e "SHOW DATABASES;" || echo "❌ Échec connexion MySQL"
+      - name: Debug database connection
+        env:
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: mes_frais
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          MONGODB_HOST: 127.0.0.1
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: mes_frais_logs
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
+          MONGODB_AUTH_SOURCE: admin
+        run: |
+          echo "Variables d'environnement pour Django:"
+          echo "DB_HOST: $DB_HOST"
+          echo "DB_PORT: $DB_PORT"
+          echo "DB_NAME: $DB_NAME"
+          echo "DB_USER: $DB_USER"
+          
+          echo "Test final de connectivité MySQL avec les mêmes paramètres:"
+          mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD -e "SHOW DATABASES;" || echo "❌ Échec connexion MySQL"
 
-  #     - name: Run migrations
-  #       env:
-  #         SECRET_KEY: test-secret-key-for-github-actions
-  #         DB_NAME: mes_frais
-  #         DB_USER: test_user
-  #         DB_PASSWORD: test_password
-  #         DB_HOST: 127.0.0.1
-  #         DB_PORT: 3306
-  #         MONGODB_HOST: 127.0.0.1
-  #         MONGODB_PORT: 27017
-  #         MONGODB_DATABASE: mes_frais_logs
-  #         MONGODB_USERNAME: test_user
-  #         MONGODB_PASSWORD: test_password
-  #         MONGODB_AUTH_SOURCE: admin
-  #       run: |
-  #         source venv/bin/activate
-  #         python manage.py migrate --noinput
+      - name: Run migrations
+        env:
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: mes_frais
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          MONGODB_HOST: 127.0.0.1
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: mes_frais_logs
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
+          MONGODB_AUTH_SOURCE: admin
+        run: |
+          source venv/bin/activate
+          python manage.py migrate --noinput
 
-  #     - name: Run tests
-  #       env:
-  #         SECRET_KEY: test-secret-key-for-github-actions
-  #         DB_NAME: mes_frais
-  #         DB_USER: test_user
-  #         DB_PASSWORD: test_password
-  #         DB_HOST: 127.0.0.1
-  #         DB_PORT: 3306
-  #         MONGODB_HOST: 127.0.0.1
-  #         MONGODB_PORT: 27017
-  #         MONGODB_DATABASE: mes_frais_logs
-  #         MONGODB_USERNAME: test_user
-  #         MONGODB_PASSWORD: test_password
-  #         MONGODB_AUTH_SOURCE: admin
-  #       run: |
-  #         source venv/bin/activate
-  #         python manage.py test
+      - name: Run tests
+        env:
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: mes_frais
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          MONGODB_HOST: 127.0.0.1
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: mes_frais_logs
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
+          MONGODB_AUTH_SOURCE: admin
+        run: |
+          source venv/bin/activate
+          python manage.py test
 
   # Job 2: Build et validation du code
   build:
     runs-on: ubuntu-latest
     name: Build et Collecte des Assets
-    # needs: test  # Commenté car le job test est désactivé temporairement
+    needs: test
 
     steps:
       - name: Checkout code
