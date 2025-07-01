@@ -38,12 +38,38 @@ jobs:
 
       # Étape 5 : Exécuter les tests unitaires
       - name: Run tests
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          MONGODB_HOST: ${{ secrets.DB_HOST }}
+          MONGODB_PORT: ${{ secrets.MONGODB_PORT }}
+          MONGODB_DATABASE: ${{ secrets.MONGODB_NAME }}
+          MONGODB_USERNAME: ${{ secrets.DB_USER }}
+          MONGODB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MONGODB_AUTH_SOURCE: admin
         run: |
           source venv/bin/activate
           python manage.py test
 
       # Étape 6 : Collecter les fichiers statiques
       - name: Collect static files
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: 
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          MONGODB_HOST: ${{ secrets.DB_HOST }}
+          MONGODB_PORT: ${{ secrets.MONGODB_PORT }}
+          MONGODB_DATABASE: ${{ secrets.MONGODB_NAME }}
+          MONGODB_USERNAME: ${{ secrets.DB_USER }}
+          MONGODB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MONGODB_AUTH_SOURCE: admin
         run: |
           source venv/bin/activate
           python manage.py collectstatic --noinput
