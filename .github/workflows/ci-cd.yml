@@ -16,64 +16,96 @@ jobs:
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: test_password
-          MYSQL_DATABASE: test_db
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: mes_frais
           MYSQL_USER: test_user
           MYSQL_PASSWORD: test_password
         ports:
           - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost --protocol=tcp"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
       mongodb:
         image: mongo:5.0
         env:
           MONGO_INITDB_ROOT_USERNAME: test_user
           MONGO_INITDB_ROOT_PASSWORD: test_password
-          MONGO_INITDB_DATABASE: test_mes
+          MONGO_INITDB_DATABASE: mes_frais_logs
         ports:
           - 27017:27017
         options: >-
-          --health-cmd="mongo --eval 'db.runCommand({ping: 1})'"
+          --health-cmd="mongosh --eval 'db.runCommand({ping: 1})'"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=3
 
     steps:
-      # Étape 1 : Cloner le dépôt
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Étape 2 : Configurer Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Étape 3 : Créer et activer un virtualenv
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Create and activate virtualenv
         run: |
           python -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
 
-      # Étape 4 : Installer les dépendances
       - name: Install dependencies
         run: |
           source venv/bin/activate
           pip install -r requirements.txt
 
-      # Étape 5 : Exécuter les tests unitaires
-      - name: Run tests
+      - name: Check services
+        run: |
+          echo "Vérification des services..."
+          sleep 10
+          netstat -tuln | grep :3306 || echo "MySQL port non trouvé"
+          netstat -tuln | grep :27017 || echo "MongoDB port non trouvé"
+
+      - name: Run migrations
         env:
           SECRET_KEY: test-secret-key-for-github-actions
-          DB_NAME: test_db
+          DB_NAME: mes_frais
           DB_USER: test_user
           DB_PASSWORD: test_password
           DB_HOST: localhost
           DB_PORT: 3306
           MONGODB_HOST: localhost
           MONGODB_PORT: 27017
-          MONGODB_DATABASE: test_mes
+          MONGODB_DATABASE: mes_frais_logs
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
+          MONGODB_AUTH_SOURCE: admin
+        run: |
+          source venv/bin/activate
+          python manage.py migrate --noinput
+
+      - name: Run tests
+        env:
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: mes_frais
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: localhost
+          DB_PORT: 3306
+          MONGODB_HOST: localhost
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: mes_frais_logs
           MONGODB_USERNAME: test_user
           MONGODB_PASSWORD: test_password
           MONGODB_AUTH_SOURCE: admin
@@ -81,18 +113,17 @@ jobs:
           source venv/bin/activate
           python manage.py test
 
-      # Étape 6 : Collecter les fichiers statiques
       - name: Collect static files
         env:
           SECRET_KEY: test-secret-key-for-github-actions
-          DB_NAME: test_db
+          DB_NAME: mes_frais
           DB_USER: test_user
           DB_PASSWORD: test_password
           DB_HOST: localhost
           DB_PORT: 3306
           MONGODB_HOST: localhost
           MONGODB_PORT: 27017
-          MONGODB_DATABASE: test_mes
+          MONGODB_DATABASE: mes_frais_logs
           MONGODB_USERNAME: test_user
           MONGODB_PASSWORD: test_password
           MONGODB_AUTH_SOURCE: admin
@@ -100,7 +131,6 @@ jobs:
           source venv/bin/activate
           python manage.py collectstatic --noinput
 
-      # Étape 7 : Déployer sur le serveur (uniquement sur push)
       - name: Deploy to server
         if: github.event_name == 'push'
         env:
