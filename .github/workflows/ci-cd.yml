@@ -293,11 +293,12 @@ jobs:
             # Utilisation de sudo -S pour fournir le mot de passe si nécessaire
             # On définit le mot de passe comme variable d'environnement pour éviter les problèmes d'échappement
             SUDO_PASS=${{ secrets.SUDO_PASSWORD }}
-            echo "$SUDO_PASS" | sudo -S systemctl restart ${{ secrets.SERVICE_NAME }}
+            # Tenter d'exécuter sans mot de passe d'abord, en utilisant le chemin complet
+            sudo /usr/bin/systemctl restart ${{ secrets.SERVICE_NAME }} || echo "$SUDO_PASS" | sudo -S /usr/bin/systemctl restart ${{ secrets.SERVICE_NAME }}
             
             # Vérification que le service a bien redémarré
             sleep 5
-            sudo systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
+            sudo /usr/bin/systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
           EOF
 
   # Job 4: Notification du déploiement (optionnel)
