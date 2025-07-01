@@ -27,9 +27,9 @@ def generate_test_logs():
         defaults={'email': 'admin@test.com', 'is_staff': True}
     )
     
-    # Créer une requête de test
+    # Créer une requête de test (simulation d'API, pas admin)
     factory = RequestFactory()
-    request = factory.post('/test/', {'test': 'data'})
+    request = factory.post('/api/operations/', {'test': 'data'})
     request.user = user
     request.META['REMOTE_ADDR'] = '127.0.0.1'
     request.META['HTTP_USER_AGENT'] = 'TestAgent/1.0'
@@ -54,7 +54,7 @@ def generate_test_logs():
         )
         print(f"   ✅ {event_type}")
     
-    # Générer des logs CRUD
+    # Générer des logs CRUD (simulation d'API)
     print("2. Génération de logs CRUD...")
     crud_events = [
         ('create', 'Operation'),
@@ -94,14 +94,14 @@ def generate_test_logs():
         )
         print(f"   ✅ Erreur {type(error).__name__}")
     
-    # Générer des logs d'événements métier
+    # Générer des logs d'événements métier (simulation d'API)
     print("4. Génération de logs d'événements métier...")
     business_events = [
         ('slow_request', 'performance'),
-        ('admin_access_attempt', 'security'),
         ('http_error', 'error'),
         ('bulk_operation', 'business'),
         ('data_export', 'business'),
+        ('api_rate_limit', 'security'),
     ]
     
     for event_type, category in business_events:
@@ -116,7 +116,8 @@ def generate_test_logs():
     
     print("\n✅ Génération terminée!")
     print(f"📊 {len(auth_events) + len(crud_events) + len(error_types) + len(business_events)} logs générés")
-    print("\n🌐 Accédez à l'interface admin: http://localhost:8000/admin/mongodb-logs/")
+    print("\n🌐 Accédez à l'interface admin: https://chatforall.online/admin/mongodb-logs/")
+    print("⚠️  Note: Les logs de navigation admin ne sont plus générés automatiquement")
 
 if __name__ == "__main__":
     generate_test_logs() 
