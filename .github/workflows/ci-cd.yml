@@ -282,7 +282,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
 
-          ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
+          ssh -v -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
             cd ${{ secrets.PROJECT_PATH }}
             git pull origin main
             source ${{ secrets.VENV_PATH }}/bin/activate
