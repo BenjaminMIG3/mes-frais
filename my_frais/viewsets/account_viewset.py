@@ -28,11 +28,11 @@ class AccountViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
     
     def get_queryset(self):
-        """Filtrer les comptes selon l'utilisateur connecté"""
+        """Filtrer les comptes selon l'utilisateur connecté avec optimisation"""
         user = self.request.user
         if user.is_staff:
-            return Account.objects.all()
-        return Account.objects.filter(user=user)
+            return Account.objects.select_related('user', 'created_by').all()
+        return Account.objects.select_related('user', 'created_by').filter(user=user)
     
     def get_serializer_class(self):
         """Utiliser le serializer approprié selon l'action"""
@@ -77,7 +77,7 @@ class AccountViewSet(viewsets.ModelViewSet):
     def operations(self, request, pk=None):
         """Récupérer toutes les opérations d'un compte"""
         account = self.get_object()
-        operations = account.operations.all().order_by('-created_at')
+        operations = account.operations.select_related('created_by').all().order_by('-created_at')
         
         from my_frais.serializers.operation_serializer import OperationListSerializer
         serializer = OperationListSerializer(operations, many=True)
@@ -140,12 +140,13 @@ class AccountViewSet(viewsets.ModelViewSet):
         
         try:
             montant_decimal = Decimal(str(montant))
+            ancien_solde = account.solde
             account.solde += montant_decimal
             account.save()
             
             # Créer une opération d'ajustement
             from my_frais.models import Operation
-            Operation.objects.create(
+            operation_created = Operation.objects.create(
                 compte_reference=account,
                 montant=montant_decimal,
                 description=f"Ajustement: {raison}",
@@ -153,9 +154,10 @@ class AccountViewSet(viewsets.ModelViewSet):
             )
             
             return Response({
-                'message': 'Solde ajusté avec succès',
+                'ajustement': float(montant_decimal),
+                'ancien_solde': float(ancien_solde),
                 'nouveau_solde': float(account.solde),
-                'ajustement': float(montant_decimal)
+                'operation_created': True
             })
             
         except (ValueError, TypeError):
@@ -174,12 +176,25 @@ class AccountViewSet(viewsets.ModelViewSet):
         
         # Comptes avec solde négatif
         comptes_negatifs = accounts.filter(solde__lt=0).count()
+        comptes_positifs = total_comptes - comptes_negatifs
+        
+        # Détails des comptes
+        comptes_details = []
+        for compte in accounts:
+            operations_count = compte.operations.count()
+            comptes_details.append({
+                'id': compte.id,
+                'nom': compte.nom,
+                'solde': float(compte.solde),
+                'operations_count': operations_count
+            })
         
         return Response({
             'total_comptes': total_comptes,
             'total_solde': float(total_solde),
+            'comptes_positifs': comptes_positifs,
             'comptes_negatifs': comptes_negatifs,
-            'comptes_positifs': total_comptes - comptes_negatifs
+            'comptes': comptes_details
         })
 
     @action(detail=False, methods=['get'])
@@ -199,81 +214,87 @@ class AccountViewSet(viewsets.ModelViewSet):
         derniere_activite_globale = None
         
         for compte in accounts:
-            operations_compte = compte.operations.all()
-            nb_operations = operations_compte.count()
-            total_operations += nb_operations
+            compte_operations = compte.operations.all()
+            operations_count = compte_operations.count()
+            total_operations += operations_count
             
-            # Dernière opération du compte
-            derniere_op = operations_compte.order_by('-created_at').first()
-            if derniere_op and (not derniere_activite_globale or derniere_op.created_at > derniere_activite_globale):
-                derniere_activite_globale = derniere_op.created_at
-            
-            # Activité récente (30 jours)
-            today = datetime.now().date()
-            month_ago = today - timedelta(days=30)
-            operations_recentes = operations_compte.filter(created_at__date__gte=month_ago)
-            montant_recent = operations_recentes.aggregate(total=Sum('montant'))['total'] or Decimal('0.00')
-            
-            # Prélèvements actifs sur ce compte
-            prelevements_actifs = compte.operations.filter(
-                directdebit__actif=True, 
-                directdebit__isnull=False
-            ).count()
-            
-            # Revenus récurrents actifs sur ce compte
-            revenus_actifs = compte.recurring_incomes.filter(actif=True).count()
+            derniere_operation = compte_operations.order_by('-created_at').first()
+            if derniere_operation:
+                if derniere_activite_globale is None or derniere_operation.created_at > derniere_activite_globale:
+                    derniere_activite_globale = derniere_operation.created_at
             
             comptes_details.append({
                 'id': compte.id,
                 'nom': compte.nom,
                 'solde': float(compte.solde),
-                'status': 'positif' if compte.solde >= 0 else 'negatif',
-                'status_niveau': 'excellent' if compte.solde > 1000 else
-                               'bon' if compte.solde > 0 else
-                               'attention' if compte.solde > -500 else 'critique',
-                'total_operations': nb_operations,
-                'operations_30j': operations_recentes.count(),
-                'variation_30j': float(montant_recent),
-                'derniere_activite': derniere_op.created_at.isoformat() if derniere_op else None,
-                'prelevements_actifs': prelevements_actifs,
-                'revenus_actifs': revenus_actifs,
-                'created_at': compte.created_at.isoformat()
+                'nombre_operations': operations_count,
+                'derniere_activite': derniere_operation.created_at.isoformat() if derniere_operation else None,
+                'status': 'positif' if compte.solde >= 0 else 'negatif'
             })
         
-        # Trier les comptes par solde décroissant
-        comptes_details.sort(key=lambda x: x['solde'], reverse=True)
+        # Statistiques d'activité récente
+        today = datetime.now().date()
+        week_ago = today - timedelta(days=7)
+        month_ago = today - timedelta(days=30)
         
-        # Statistiques globales
-        solde_moyen = float(total_solde / total_comptes) if total_comptes > 0 else 0
-        solde_max = float(max(compte.solde for compte in accounts)) if accounts else 0
-        solde_min = float(min(compte.solde for compte in accounts)) if accounts else 0
+        from my_frais.models import Operation
+        user = request.user
+        if user.is_staff:
+            operations_7_jours = Operation.objects.filter(created_at__date__gte=week_ago).count()
+            operations_30_jours = Operation.objects.filter(created_at__date__gte=month_ago).count()
+        else:
+            operations_7_jours = Operation.objects.filter(compte_reference__user=user, created_at__date__gte=week_ago).count()
+            operations_30_jours = Operation.objects.filter(compte_reference__user=user, created_at__date__gte=month_ago).count()
         
-        # Répartition des soldes
-        repartition_soldes = {
-            'excellent': len([c for c in comptes_details if c['status_niveau'] == 'excellent']),
-            'bon': len([c for c in comptes_details if c['status_niveau'] == 'bon']),
-            'attention': len([c for c in comptes_details if c['status_niveau'] == 'attention']),
-            'critique': len([c for c in comptes_details if c['status_niveau'] == 'critique'])
-        }
+        # Prélèvements et revenus actifs
+        from my_frais.models import DirectDebit, RecurringIncome
+        if user.is_staff:
+            prelevements_actifs = DirectDebit.objects.filter(actif=True).count()
+            revenus_actifs = RecurringIncome.objects.filter(actif=True).count()
+        else:
+            prelevements_actifs = DirectDebit.objects.filter(compte_reference__user=user, actif=True).count()
+            revenus_actifs = RecurringIncome.objects.filter(compte_reference__user=user, actif=True).count()
+        
+        # Alertes
+        alertes = []
+        if comptes_negatifs.count() > 0:
+            alertes.append(f"{comptes_negatifs.count()} compte(s) en déficit")
+        
+        # Prélèvements imminents (dans les 7 prochains jours)
+        date_limite = today + timedelta(days=7)
+        prelevements_imminents = 0
+        if user.is_staff:
+            prelevements_imminents = DirectDebit.objects.filter(
+                actif=True, 
+                date_prelevement__lte=date_limite
+            ).count()
+        else:
+            prelevements_imminents = DirectDebit.objects.filter(
+                compte_reference__user=user,
+                actif=True, 
+                date_prelevement__lte=date_limite
+            ).count()
+        
+        if prelevements_imminents > 0:
+            alertes.append(f"{prelevements_imminents} prélèvement(s) dans les 7 prochains jours")
         
         return Response({
-            'resume': {
+            'summary': {
                 'total_comptes': total_comptes,
                 'total_solde': float(total_solde),
-                'solde_moyen': solde_moyen,
-                'solde_maximum': solde_max,
-                'solde_minimum': solde_min,
                 'comptes_positifs': comptes_positifs.count(),
-                'comptes_negatifs': comptes_negatifs.count(),
-                'total_operations': total_operations,
-                'derniere_activite_globale': derniere_activite_globale.isoformat() if derniere_activite_globale else None
+                'comptes_negatifs': comptes_negatifs.count()
             },
-            'repartition': repartition_soldes,
-            'comptes': comptes_details,
-            'alertes': {
-                'comptes_critiques': repartition_soldes['critique'],
-                'comptes_attention': repartition_soldes['attention'],
-                'comptes_inactifs': len([c for c in comptes_details if c['operations_30j'] == 0]),
-                'necessite_attention': repartition_soldes['critique'] > 0 or repartition_soldes['attention'] > 0
-            }
+            'recent_activity': {
+                'operations_7_jours': operations_7_jours,
+                'operations_30_jours': operations_30_jours,
+                'prélèvements_actifs': prelevements_actifs,
+                'revenus_actifs': revenus_actifs
+            },
+            'alerts': {
+                'comptes_negatifs': comptes_negatifs.count(),
+                'prélèvements_imminents': prelevements_imminents,
+                'messages': alertes
+            },
+            'comptes': comptes_details
         }) 

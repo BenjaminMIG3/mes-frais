@@ -2,6 +2,7 @@
 """
 Script de gestion des prélèvements automatiques et revenus récurrents
 Permet de traiter manuellement les prélèvements et revenus à échéance
+Utilise le nouveau système de transactions automatiques optimisé
 """
 
 import os
@@ -15,7 +16,9 @@ from decimal import Decimal
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
 
-from my_frais.models import DirectDebit, RecurringIncome, Operation, Account, AutomatedTask
+from my_frais.models import DirectDebit, RecurringIncome, Operation, Account, AutomatedTask, AutomaticTransaction
+from my_frais.services import AutomaticTransactionService
+from django.db import models
 
 
 def process_daily_payments():
@@ -25,8 +28,10 @@ def process_daily_payments():
     print("=" * 60)
     
     try:
-        processed_count = DirectDebit.process_all_due_payments()
-        execution_duration = time.time() - start_time
+        # Utiliser le nouveau service optimisé
+        result = AutomaticTransactionService.process_daily_transactions()
+        processed_count = result['payments']
+        execution_duration = result['execution_duration']
         
         if processed_count > 0:
             print(f"✅ {processed_count} prélèvements traités avec succès")
@@ -44,7 +49,8 @@ def process_daily_payments():
             details={
                 'date_execution': date.today().isoformat(),
                 'heure_execution': datetime.now().strftime('%H:%M:%S'),
-                'type_operation': 'prélèvements'
+                'type_operation': 'prélèvements',
+                'systeme': 'nouveau_optimise'
             }
         )
             
@@ -78,8 +84,10 @@ def process_daily_incomes():
     print("=" * 60)
     
     try:
-        processed_count = RecurringIncome.process_all_due_incomes()
-        execution_duration = time.time() - start_time
+        # Utiliser le nouveau service optimisé
+        result = AutomaticTransactionService.process_daily_transactions()
+        processed_count = result['incomes']
+        execution_duration = result['execution_duration']
         
         if processed_count > 0:
             print(f"✅ {processed_count} revenus traités avec succès")
@@ -97,7 +105,8 @@ def process_daily_incomes():
             details={
                 'date_execution': date.today().isoformat(),
                 'heure_execution': datetime.now().strftime('%H:%M:%S'),
-                'type_operation': 'revenus'
+                'type_operation': 'revenus',
+                'systeme': 'nouveau_optimise'
             }
         )
             
@@ -131,14 +140,17 @@ def process_all_daily_operations():
     print("=" * 60)
     
     try:
-        payments_count = process_daily_payments()
-        incomes_count = process_daily_incomes()
-        
-        total_count = payments_count + incomes_count
-        execution_duration = time.time() - start_time
+        # Utiliser le nouveau service optimisé
+        result = AutomaticTransactionService.process_daily_transactions()
+        total_count = result['total']
+        payments_count = result['payments']
+        incomes_count = result['incomes']
+        execution_duration = result['execution_duration']
         
         if total_count > 0:
             print(f"\n🎉 Traitement terminé: {total_count} opérations au total")
+            print(f"   - Prélèvements: {payments_count}")
+            print(f"   - Revenus: {incomes_count}")
             status = 'SUCCESS'
         else:
             print(f"\nℹ️  Aucune opération à traiter aujourd'hui")
@@ -155,7 +167,8 @@ def process_all_daily_operations():
                 'heure_execution': datetime.now().strftime('%H:%M:%S'),
                 'type_operation': 'complet',
                 'prélèvements_traités': payments_count,
-                'revenus_traités': incomes_count
+                'revenus_traités': incomes_count,
+                'systeme': 'nouveau_optimise'
             }
         )
         
@@ -200,19 +213,28 @@ def show_due_payments():
         print("ℹ️  Aucun prélèvement à échéance")
         return
     
-    total_amount = Decimal('0.00')
+    print(f"📊 {due_payments.count()} prélèvements à traiter:")
+    print()
     
     for payment in due_payments:
-        print(f"💰 {payment.description}")
-        print(f"   Compte: {payment.compte_reference.nom}")
-        print(f"   Montant: {payment.montant}€")
-        print(f"   Date échéance: {payment.date_prelevement}")
-        print(f"   Fréquence: {payment.frequence}")
-        print(f"   Créé par: {payment.created_by.username}")
-        print("-" * 40)
-        total_amount += payment.montant
-    
-    print(f"💵 Montant total à prélever: {total_amount}€")
+        # Vérifier si déjà traité
+        source_id = f"direct_debit_{payment.id}_{payment.date_prelevement}"
+        already_processed = AutomaticTransaction.objects.filter(
+            source_id=source_id,
+            transaction_type='direct_debit'
+        ).exists()
+        
+        status_icon = "✅" if already_processed else "⏳"
+        print(f"{status_icon} {payment.description}")
+        print(f"   - Compte: {payment.compte_reference.nom}")
+        print(f"   - Montant: {payment.montant}€")
+        print(f"   - Date: {payment.date_prelevement}")
+        print(f"   - Fréquence: {payment.frequence}")
+        if already_processed:
+            print(f"   - Statut: Traité")
+        else:
+            print(f"   - Statut: En attente")
+        print()
 
 
 def show_due_incomes():
@@ -233,162 +255,195 @@ def show_due_incomes():
         print("ℹ️  Aucun revenu à échéance")
         return
     
-    total_amount = Decimal('0.00')
+    print(f"📊 {due_incomes.count()} revenus à traiter:")
+    print()
     
     for income in due_incomes:
-        print(f"💰 {income.type_revenu} - {income.description}")
-        print(f"   Compte: {income.compte_reference.nom}")
-        print(f"   Montant: {income.montant}€")
-        print(f"   Date échéance: {income.date_premier_versement}")
-        print(f"   Fréquence: {income.frequence}")
-        print(f"   Créé par: {income.created_by.username}")
-        print("-" * 40)
-        total_amount += income.montant
-    
-    print(f"💵 Montant total à percevoir: {total_amount}€")
+        # Vérifier si déjà traité
+        source_id = f"recurring_income_{income.id}_{income.date_premier_versement}"
+        already_processed = AutomaticTransaction.objects.filter(
+            source_id=source_id,
+            transaction_type='recurring_income'
+        ).exists()
+        
+        status_icon = "✅" if already_processed else "⏳"
+        print(f"{status_icon} {income.type_revenu} - {income.description}")
+        print(f"   - Compte: {income.compte_reference.nom}")
+        print(f"   - Montant: {income.montant}€")
+        print(f"   - Date: {income.date_premier_versement}")
+        print(f"   - Fréquence: {income.frequence}")
+        if already_processed:
+            print(f"   - Statut: Traité")
+        else:
+            print(f"   - Statut: En attente")
+        print()
 
 
 def show_upcoming_payments(days=7):
-    """Affiche les prélèvements à venir dans les X prochains jours"""
+    """Affiche les prélèvements à venir"""
     today = date.today()
     future_date = today + timedelta(days=days)
     
-    print(f"📅 Prélèvements à venir dans les {days} prochains jours")
+    print(f"📋 Prélèvements à venir (prochains {days} jours) - {today}")
     print("=" * 60)
     
     upcoming_payments = DirectDebit.objects.filter(
         actif=True,
-        date_prelevement__gte=today,
-        date_prelevement__lte=future_date
+        date_prelevement__range=[today, future_date]
     ).exclude(
         echeance__lt=today
     ).select_related('compte_reference', 'created_by').order_by('date_prelevement')
     
     if not upcoming_payments:
-        print(f"ℹ️  Aucun prélèvement à venir dans les {days} prochains jours")
+        print("ℹ️  Aucun prélèvement à venir")
         return
     
-    total_amount = Decimal('0.00')
+    print(f"📊 {upcoming_payments.count()} prélèvements à venir:")
+    print()
     
     for payment in upcoming_payments:
         days_until = (payment.date_prelevement - today).days
-        print(f"📅 {payment.date_prelevement} (dans {days_until} jours)")
-        print(f"   {payment.description} - {payment.montant}€")
-        print(f"   Compte: {payment.compte_reference.nom}")
-        print("-" * 40)
-        total_amount += payment.montant
-    
-    print(f"💵 Montant total à prélever: {total_amount}€")
+        print(f"📅 {payment.description}")
+        print(f"   - Compte: {payment.compte_reference.nom}")
+        print(f"   - Montant: {payment.montant}€")
+        print(f"   - Date: {payment.date_prelevement} (dans {days_until} jours)")
+        print(f"   - Fréquence: {payment.frequence}")
+        print()
 
 
 def show_upcoming_incomes(days=7):
-    """Affiche les revenus à venir dans les X prochains jours"""
+    """Affiche les revenus à venir"""
     today = date.today()
     future_date = today + timedelta(days=days)
     
-    print(f"📅 Revenus à venir dans les {days} prochains jours")
+    print(f"📋 Revenus à venir (prochains {days} jours) - {today}")
     print("=" * 60)
     
     upcoming_incomes = RecurringIncome.objects.filter(
         actif=True,
-        date_premier_versement__gte=today,
-        date_premier_versement__lte=future_date
+        date_premier_versement__range=[today, future_date]
     ).exclude(
         date_fin__lt=today
     ).select_related('compte_reference', 'created_by').order_by('date_premier_versement')
     
     if not upcoming_incomes:
-        print(f"ℹ️  Aucun revenu à venir dans les {days} prochains jours")
+        print("ℹ️  Aucun revenu à venir")
         return
     
-    total_amount = Decimal('0.00')
+    print(f"📊 {upcoming_incomes.count()} revenus à venir:")
+    print()
     
     for income in upcoming_incomes:
         days_until = (income.date_premier_versement - today).days
-        print(f"📅 {income.date_premier_versement} (dans {days_until} jours)")
-        print(f"   {income.type_revenu} - {income.description} - {income.montant}€")
-        print(f"   Compte: {income.compte_reference.nom}")
-        print("-" * 40)
-        total_amount += income.montant
-    
-    print(f"💵 Montant total à percevoir: {total_amount}€")
+        print(f"📅 {income.type_revenu} - {income.description}")
+        print(f"   - Compte: {income.compte_reference.nom}")
+        print(f"   - Montant: {income.montant}€")
+        print(f"   - Date: {income.date_premier_versement} (dans {days_until} jours)")
+        print(f"   - Fréquence: {income.frequence}")
+        print()
 
 
 def show_account_balances():
     """Affiche les soldes des comptes"""
-    print("🏦 Soldes des comptes")
+    print(f"💰 Soldes des comptes - {date.today()}")
     print("=" * 60)
     
-    accounts = Account.objects.select_related('user').all()
+    accounts = Account.objects.select_related('user').order_by('user__username', 'nom')
     
     if not accounts:
         print("ℹ️  Aucun compte trouvé")
         return
     
-    total_balance = Decimal('0.00')
-    
     for account in accounts:
-        status = "✅ Positif" if account.solde >= 0 else "❌ Négatif"
-        print(f"💰 {account.nom}")
-        print(f"   Propriétaire: {account.user.username}")
-        print(f"   Solde: {account.solde}€ {status}")
-        print("-" * 40)
-        total_balance += account.solde
+        # Calculer le solde avec les transactions automatiques
+        balance_with_automatic = AutomaticTransactionService.get_account_balance_with_automatic_transactions(account)
+        
+        print(f"🏦 {account.nom} ({account.user.username})")
+        print(f"   - Solde actuel: {account.solde}€")
+        print(f"   - Solde avec transactions automatiques: {balance_with_automatic}€")
+        
+        # Afficher un résumé des transactions récentes
+        summary = AutomaticTransactionService.get_transaction_summary(account)
+        if summary['total_transactions'] > 0:
+            print(f"   - Transactions automatiques (30j): {summary['total_transactions']}")
+            print(f"     • Prélèvements: {summary['payments_count']} (-{abs(summary['payments_total'])}€)")
+            print(f"     • Revenus: {summary['incomes_count']} (+{summary['incomes_total']}€)")
+            print(f"     • Impact net: {summary['net_impact']}€")
+        print()
+
+
+def show_automatic_transactions_summary():
+    """Affiche un résumé des transactions automatiques"""
+    print(f"📊 Résumé des transactions automatiques - {date.today()}")
+    print("=" * 60)
     
-    print(f"💵 Solde total: {total_balance}€")
+    # Statistiques globales
+    total_transactions = AutomaticTransaction.objects.count()
+    today_transactions = AutomaticTransaction.objects.filter(date_transaction=date.today()).count()
+    
+    payments_total = AutomaticTransaction.objects.filter(
+        transaction_type='direct_debit'
+    ).aggregate(total=models.Sum('montant'))['total'] or Decimal('0')
+    
+    incomes_total = AutomaticTransaction.objects.filter(
+        transaction_type='recurring_income'
+    ).aggregate(total=models.Sum('montant'))['total'] or Decimal('0')
+    
+    print(f"📈 Statistiques globales:")
+    print(f"   - Total des transactions: {total_transactions}")
+    print(f"   - Transactions aujourd'hui: {today_transactions}")
+    print(f"   - Total des prélèvements: {abs(payments_total)}€")
+    print(f"   - Total des revenus: {incomes_total}€")
+    print(f"   - Impact net: {incomes_total + payments_total}€")
+    
+    # Transactions récentes
+    print(f"\n📋 5 dernières transactions:")
+    recent_transactions = AutomaticTransaction.objects.select_related(
+        'compte_reference', 'created_by'
+    ).order_by('-created_at')[:5]
+    
+    for transaction in recent_transactions:
+        type_icon = "💸" if transaction.transaction_type == 'direct_debit' else "💰"
+        print(f"{type_icon} {transaction.description}")
+        print(f"   - Compte: {transaction.compte_reference.nom}")
+        print(f"   - Montant: {transaction.montant}€")
+        print(f"   - Date: {transaction.date_transaction}")
+        print(f"   - Type: {transaction.get_transaction_type_display()}")
+        print()
 
 
 def main():
     """Fonction principale du script"""
-    if len(sys.argv) < 2:
-        print("Usage: python manage_direct_debits.py [commande]")
-        print("\nCommandes disponibles:")
-        print("  process-payments    - Traiter les prélèvements à échéance")
-        print("  process-incomes     - Traiter les revenus à échéance")
-        print("  process-all         - Traiter toutes les opérations à échéance")
-        print("  due-payments        - Afficher les prélèvements à échéance")
-        print("  due-incomes         - Afficher les revenus à échéance")
-        print("  upcoming-payments   - Afficher les prélèvements à venir (7 jours)")
-        print("  upcoming-incomes    - Afficher les revenus à venir (7 jours)")
-        print("  balances            - Afficher les soldes des comptes")
-        print("  all                 - Exécuter toutes les commandes")
-        return
+    import argparse
     
-    command = sys.argv[1].lower()
+    parser = argparse.ArgumentParser(description='Gestion des prélèvements et revenus automatiques')
+    parser.add_argument('action', choices=[
+        'process-payments', 'process-incomes', 'process-all',
+        'show-due-payments', 'show-due-incomes', 'show-upcoming-payments',
+        'show-upcoming-incomes', 'show-balances', 'show-summary'
+    ], help='Action à effectuer')
+    parser.add_argument('--days', type=int, default=7, help='Nombre de jours pour les prévisions')
     
-    if command == 'process-payments':
+    args = parser.parse_args()
+    
+    if args.action == 'process-payments':
         process_daily_payments()
-    elif command == 'process-incomes':
+    elif args.action == 'process-incomes':
         process_daily_incomes()
-    elif command == 'process-all':
+    elif args.action == 'process-all':
         process_all_daily_operations()
-    elif command == 'due-payments':
+    elif args.action == 'show-due-payments':
         show_due_payments()
-    elif command == 'due-incomes':
+    elif args.action == 'show-due-incomes':
         show_due_incomes()
-    elif command == 'upcoming-payments':
-        days = int(sys.argv[2]) if len(sys.argv) > 2 else 7
-        show_upcoming_payments(days)
-    elif command == 'upcoming-incomes':
-        days = int(sys.argv[2]) if len(sys.argv) > 2 else 7
-        show_upcoming_incomes(days)
-    elif command == 'balances':
+    elif args.action == 'show-upcoming-payments':
+        show_upcoming_payments(args.days)
+    elif args.action == 'show-upcoming-incomes':
+        show_upcoming_incomes(args.days)
+    elif args.action == 'show-balances':
         show_account_balances()
-    elif command == 'all':
-        print("🔄 Exécution de toutes les commandes...\n")
-        show_account_balances()
-        print()
-        show_due_payments()
-        print()
-        show_due_incomes()
-        print()
-        process_all_daily_operations()
-        print()
-        show_upcoming_payments()
-        print()
-        show_upcoming_incomes()
-    else:
-        print(f"❌ Commande inconnue: {command}")
+    elif args.action == 'show-summary':
+        show_automatic_transactions_summary()
 
 
 if __name__ == '__main__':

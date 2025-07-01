@@ -4,48 +4,38 @@ from decimal import Decimal
 from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 
+from my_frais.services import BudgetProjectionService
+
 
 class BudgetProjectionSerializer(serializers.ModelSerializer):
-    compte_reference_username = serializers.CharField(source='compte_reference.user.username', read_only=True)
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    """
+    Serializer pour les projections de budget
+    Utilise le nouveau système de transactions automatiques optimisé
+    """
+    compte_reference_nom = serializers.CharField(source='compte_reference.nom', read_only=True)
+    user_username = serializers.CharField(source='created_by.username', read_only=True)
     
     class Meta:
         model = BudgetProjection
         fields = [
-            'id', 'compte_reference', 'compte_reference_username',
-            'date_projection', 'periode_projection', 'solde_initial',
-            'projections_data', 'created_by', 'created_by_username',
-            'created_at', 'updated_at'
+            'id', 'compte_reference', 'compte_reference_nom', 'date_projection',
+            'periode_projection', 'solde_initial', 'projections_data',
+            'user_username', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'solde_initial', 'projections_data', 'created_by', 'created_by_username', 'created_at', 'updated_at']
-    
-    def validate_periode_projection(self, value):
-        """Validation de la période de projection"""
-        if value <= 0:
-            raise serializers.ValidationError("La période de projection doit être positive.")
-        if value > 60:  # Limite à 5 ans
-            raise serializers.ValidationError("La période de projection ne peut pas dépasser 60 mois.")
-        return value
-    
-    def validate_compte_reference(self, value):
-        """Validation du compte de référence"""
-        if not Account.objects.filter(id=value.id).exists():
-            raise serializers.ValidationError("Le compte de référence spécifié n'existe pas.")
-        return value
+        read_only_fields = ['solde_initial', 'projections_data', 'created_at', 'updated_at']
     
     def create(self, validated_data):
         """Création d'une projection de budget avec calcul automatique"""
         validated_data['created_by'] = self.context['request'].user
         validated_data['solde_initial'] = validated_data['compte_reference'].solde
         
-        # Utiliser le calculateur pour générer les projections
-        calculator = BudgetProjectionCalculatorSerializer(context=self.context)
-        projections_data = calculator.calculate_projections(
+        # Utiliser le nouveau service pour générer les projections
+        projections_data = BudgetProjectionService.calculate_projections(
             compte=validated_data['compte_reference'],
-            date_debut=validated_data['date_projection'],
-            periode_mois=validated_data['periode_projection'],
-            inclure_prelevements=True,
-            inclure_revenus=True
+            start_date=validated_data['date_projection'],
+            period_months=validated_data['periode_projection'],
+            include_payments=True,
+            include_incomes=True
         )
         validated_data['projections_data'] = projections_data
         
@@ -53,128 +43,78 @@ class BudgetProjectionSerializer(serializers.ModelSerializer):
 
 
 class BudgetProjectionCalculatorSerializer(serializers.Serializer):
-    """Serializer pour calculer les projections de budget sans les sauvegarder"""
-    compte_reference = serializers.PrimaryKeyRelatedField(queryset=Account.objects.all())
-    date_debut = serializers.DateField(default=date.today)
-    periode_mois = serializers.IntegerField(min_value=1, max_value=60, default=12)
+    """
+    Serializer pour calculer les projections de budget
+    Utilise le nouveau système de transactions automatiques
+    """
+    compte = serializers.PrimaryKeyRelatedField(queryset=Account.objects.all())
+    date_debut = serializers.DateField()
+    periode_mois = serializers.IntegerField(min_value=1, max_value=60)
     inclure_prelevements = serializers.BooleanField(default=True)
     inclure_revenus = serializers.BooleanField(default=True)
     
-    def validate_compte_reference(self, value):
-        """Validation du compte de référence selon l'utilisateur connecté"""
-        user = self.context['request'].user
-        if not user.is_staff and value.user != user:
-            raise serializers.ValidationError("Vous ne pouvez pas accéder à ce compte.")
-        return value
-    
     def calculate_projections(self, compte, date_debut, periode_mois, inclure_prelevements=True, inclure_revenus=True):
         """
-        Calcule les projections de budget en prenant en compte :
-        - Les prélèvements récurrents
-        - Les revenus récurrents
-        - Les opérations ponctuelles déjà programmées
+        Calcule les projections de budget en utilisant le nouveau service
         """
-        date_fin = date_debut + relativedelta(months=periode_mois)
-        projections = []
-        solde_courant = compte.solde
+        return BudgetProjectionService.calculate_projections(
+            account=compte,
+            start_date=date_debut,
+            period_months=periode_mois,
+            include_payments=inclure_prelevements,
+            include_incomes=inclure_revenus
+        )
+    
+    def validate_periode_mois(self, value):
+        """Validation de la période de projection"""
+        if value < 1:
+            raise serializers.ValidationError("La période doit être d'au moins 1 mois")
+        if value > 60:
+            raise serializers.ValidationError("La période ne peut pas dépasser 60 mois")
+        return value
+    
+    def validate_date_debut(self, value):
+        """Validation de la date de début"""
+        if value < date.today():
+            raise serializers.ValidationError("La date de début ne peut pas être dans le passé")
+        return value
+
+
+class BudgetProjectionDetailSerializer(serializers.ModelSerializer):
+    """
+    Serializer détaillé pour les projections de budget
+    Inclut des informations supplémentaires sur les transactions
+    """
+    compte_reference_nom = serializers.CharField(source='compte_reference.nom', read_only=True)
+    user_username = serializers.CharField(source='created_by.username', read_only=True)
+    projections_summary = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = BudgetProjection
+        fields = [
+            'id', 'compte_reference', 'compte_reference_nom', 'date_projection',
+            'periode_projection', 'solde_initial', 'projections_data',
+            'projections_summary', 'user_username', 'created_at', 'updated_at'
+        ]
+    
+    def get_projections_summary(self, obj):
+        """Calcule un résumé des projections"""
+        if not obj.projections_data:
+            return {}
         
-        # Collecter toutes les transactions futures
-        transactions_futures = []
+        projections = obj.projections_data
+        total_transactions = sum(p.get('transactions_count', 0) for p in projections)
+        total_impact = sum(p.get('total_transactions', 0) for p in projections)
         
-        # Ajouter les prélèvements récurrents si demandé
-        if inclure_prelevements:
-            prelevements = DirectDebit.objects.filter(
-                compte_reference=compte,
-                actif=True,
-                date_prelevement__lte=date_fin
-            )
-            
-            for prelevement in prelevements:
-                occurrences = prelevement.get_occurrences_until(date_fin)
-                transactions_futures.extend(occurrences)
-        
-        # Ajouter les revenus récurrents si demandé
-        if inclure_revenus:
-            revenus = RecurringIncome.objects.filter(
-                compte_reference=compte,
-                actif=True,
-                date_premier_versement__lte=date_fin
-            )
-            
-            for revenu in revenus:
-                occurrences = revenu.get_occurrences_until(date_fin)
-                transactions_futures.extend(occurrences)
-        
-        # Trier toutes les transactions par date
-        transactions_futures.sort(key=lambda x: x['date'])
-        
-        # Générer les projections mensuelles
-        date_courante = date_debut
-        
-        for mois in range(periode_mois):
-            debut_mois = date_courante
-            fin_mois = debut_mois + relativedelta(months=1) - timedelta(days=1)
-            
-            # Transactions du mois
-            transactions_mois = [
-                t for t in transactions_futures 
-                if debut_mois <= t['date'] <= fin_mois
-            ]
-            
-            # Calculer les totaux du mois
-            total_revenus = sum(
-                t['montant'] for t in transactions_mois 
-                if t['montant'] > 0
-            )
-            total_prelevements = sum(
-                abs(t['montant']) for t in transactions_mois 
-                if t['montant'] < 0
-            )
-            
-            solde_debut_mois = solde_courant
-            solde_fin_mois = solde_courant + total_revenus - total_prelevements
-            
-            projection_mois = {
-                'mois': mois + 1,
-                'date_debut': debut_mois.isoformat(),
-                'date_fin': fin_mois.isoformat(),
-                'solde_debut': float(solde_debut_mois),
-                'solde_fin': float(solde_fin_mois),
-                'total_revenus': float(total_revenus),
-                'total_prelevements': float(total_prelevements),
-                'variation': float(total_revenus - total_prelevements),
-                'transactions': [
-                    {
-                        'date': t['date'].isoformat(),
-                        'montant': float(t['montant']),
-                        'description': t['description'],
-                        'type': t['type']
-                    }
-                    for t in transactions_mois
-                ]
-            }
-            
-            projections.append(projection_mois)
-            solde_courant = solde_fin_mois
-            date_courante = debut_mois + relativedelta(months=1)
+        # Trouver le solde final
+        final_balance = projections[-1].get('solde_fin', 0) if projections else obj.solde_initial
         
         return {
-            'compte_id': compte.id,
-            'compte_nom': compte.nom,
-            'solde_initial': float(compte.solde),
-            'solde_final_projete': float(solde_courant),
-            'variation_totale': float(solde_courant - compte.solde),
-            'date_debut': date_debut.isoformat(),
-            'date_fin': date_fin.isoformat(),
-            'periode_mois': periode_mois,
-            'projections_mensuelles': projections,
-            'resume': {
-                'revenus_totaux': float(sum(p['total_revenus'] for p in projections)),
-                'prelevements_totaux': float(sum(p['total_prelevements'] for p in projections)),
-                'solde_minimum': float(min(p['solde_fin'] for p in projections)),
-                'solde_maximum': float(max(p['solde_fin'] for p in projections)),
-                'mois_solde_negatif': len([p for p in projections if p['solde_fin'] < 0])
-            }
+            'total_transactions': total_transactions,
+            'total_impact': float(total_impact),
+            'solde_final': float(final_balance),
+            'evolution_solde': float(final_balance - obj.solde_initial),
+            'moyenne_mensuelle': float(total_impact / len(projections)) if projections else 0
         }
 
 

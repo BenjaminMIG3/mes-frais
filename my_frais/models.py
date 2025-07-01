@@ -40,6 +40,32 @@ class Operation(BaseModel):
     def __str__(self):
         return f"{self.description} - {self.montant}€"
 
+class AutomaticTransaction(BaseModel):
+    """
+    Modèle pour tracer les transactions automatiques sans créer d'opérations
+    Permet d'éviter les doublons et de garder une trace des transactions automatiques
+    """
+    compte_reference = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='automatic_transactions')
+    montant = models.DecimalField(decimal_places=2, max_digits=20)
+    description = models.CharField(max_length=255)
+    date_transaction = models.DateField()
+    transaction_type = models.CharField(max_length=20, choices=[
+        ('direct_debit', 'Prélèvement automatique'),
+        ('recurring_income', 'Revenu récurrent'),
+    ])
+    source_id = models.CharField(max_length=100, help_text="ID source pour éviter les doublons")
+    source_reference = models.CharField(max_length=100, help_text="Référence de la source (DirectDebit.id ou RecurringIncome.id)")
+    processed = models.BooleanField(default=True, help_text="Indique si la transaction a été traitée")
+    
+    class Meta:
+        unique_together = ['source_id', 'transaction_type']
+        ordering = ['-date_transaction', '-created_at']
+        verbose_name = "Transaction automatique"
+        verbose_name_plural = "Transactions automatiques"
+    
+    def __str__(self):
+        return f"{self.description} - {self.montant}€ ({self.date_transaction})"
+
 class DirectDebit(Operation):
     date_prelevement = models.DateField()
     echeance = models.DateField(blank=True, null=True, default=None)
@@ -99,7 +125,7 @@ class DirectDebit(Operation):
         return occurrences
 
     def process_due_payments(self):
-        """Traite les prélèvements à échéance et crée les opérations correspondantes"""
+        """Traite les prélèvements à échéance en mettant à jour uniquement le solde du compte"""
         today = date.today()
         
         # Vérifier si le prélèvement est actif et à échéance
@@ -114,35 +140,36 @@ class DirectDebit(Operation):
             # Créer un identifiant unique pour cette occurrence
             source_id = f"direct_debit_{self.id}_{self.date_prelevement}"
             
-            # Vérifier si l'opération n'existe pas déjà
-            existing_operation = Operation.objects.filter(
-                source_automatic_id=source_id,
-                source_type='direct_debit'
+            # Vérifier si la transaction n'existe pas déjà
+            existing_transaction = AutomaticTransaction.objects.filter(
+                source_id=source_id,
+                transaction_type='direct_debit'
             ).first()
             
-            if existing_operation:
-                # L'opération existe déjà, ne pas la recréer
+            if existing_transaction:
+                # La transaction existe déjà, ne pas la retraiter
                 return False
             
             # Utiliser une transaction pour éviter les conditions de course
             with transaction.atomic():
                 # Double vérification dans la transaction
-                if Operation.objects.filter(source_automatic_id=source_id, source_type='direct_debit').exists():
+                if AutomaticTransaction.objects.filter(source_id=source_id, transaction_type='direct_debit').exists():
                     return False
                 
-                # Créer l'opération de prélèvement
-                operation = Operation.objects.create(
+                # Créer la transaction automatique
+                automatic_transaction = AutomaticTransaction.objects.create(
                     compte_reference=self.compte_reference,
                     montant=-abs(self.montant),  # Négatif pour les prélèvements
                     description=f"Prélèvement automatique - {self.description}",
-                    date_operation=today,
-                    created_by=self.created_by,
-                    source_automatic_id=source_id,
-                    source_type='direct_debit'
+                    date_transaction=today,
+                    transaction_type='direct_debit',
+                    source_id=source_id,
+                    source_reference=str(self.id),
+                    created_by=self.created_by
                 )
                 
                 # Mettre à jour le solde du compte
-                self.compte_reference.solde += operation.montant
+                self.compte_reference.solde += automatic_transaction.montant
                 self.compte_reference.save()
             
             # Mettre à jour la date de prélèvement pour la prochaine occurrence
@@ -205,23 +232,21 @@ class RecurringIncome(BaseModel):
     def get_next_occurrence(self, from_date=None):
         """Calcule la prochaine occurrence du revenu"""
         if from_date is None:
-            # Si aucune date n'est fournie, utiliser la date de premier versement actuelle
             current_date = self.date_premier_versement
         else:
-            # Sinon, utiliser la date la plus récente entre la date de premier versement et from_date
             current_date = max(self.date_premier_versement, from_date)
         
         if self.date_fin and current_date >= self.date_fin:
             return None
         
-        if self.frequence == 'Hebdomadaire':
-            return current_date + timedelta(weeks=1)
-        elif self.frequence == 'Mensuel':
+        if self.frequence == 'Mensuel':
             return current_date + relativedelta(months=1)
         elif self.frequence == 'Trimestriel':
             return current_date + relativedelta(months=3)
         elif self.frequence == 'Annuel':
             return current_date + relativedelta(years=1)
+        elif self.frequence == 'Hebdomadaire':
+            return current_date + timedelta(weeks=1)
         
         return None
 
@@ -238,7 +263,7 @@ class RecurringIncome(BaseModel):
                 occurrences.append({
                     'date': current,
                     'montant': abs(self.montant),  # Positif pour les revenus
-                    'description': f"{self.type_revenu} - {self.description}",
+                    'description': self.description,
                     'type': 'revenu'
                 })
             
@@ -250,7 +275,7 @@ class RecurringIncome(BaseModel):
         return occurrences
 
     def process_due_income(self):
-        """Traite les revenus à échéance et crée les opérations correspondantes"""
+        """Traite les revenus à échéance en mettant à jour uniquement le solde du compte"""
         today = date.today()
         
         # Vérifier si le revenu est actif et à échéance
@@ -265,35 +290,36 @@ class RecurringIncome(BaseModel):
             # Créer un identifiant unique pour cette occurrence
             source_id = f"recurring_income_{self.id}_{self.date_premier_versement}"
             
-            # Vérifier si l'opération n'existe pas déjà
-            existing_operation = Operation.objects.filter(
-                source_automatic_id=source_id,
-                source_type='recurring_income'
+            # Vérifier si la transaction n'existe pas déjà
+            existing_transaction = AutomaticTransaction.objects.filter(
+                source_id=source_id,
+                transaction_type='recurring_income'
             ).first()
             
-            if existing_operation:
-                # L'opération existe déjà, ne pas la recréer
+            if existing_transaction:
+                # La transaction existe déjà, ne pas la retraiter
                 return False
             
             # Utiliser une transaction pour éviter les conditions de course
             with transaction.atomic():
                 # Double vérification dans la transaction
-                if Operation.objects.filter(source_automatic_id=source_id, source_type='recurring_income').exists():
+                if AutomaticTransaction.objects.filter(source_id=source_id, transaction_type='recurring_income').exists():
                     return False
                 
-                # Créer l'opération de revenu
-                operation = Operation.objects.create(
+                # Créer la transaction automatique
+                automatic_transaction = AutomaticTransaction.objects.create(
                     compte_reference=self.compte_reference,
                     montant=abs(self.montant),  # Positif pour les revenus
                     description=f"Revenu automatique - {self.type_revenu} - {self.description}",
-                    date_operation=today,
-                    created_by=self.created_by,
-                    source_automatic_id=source_id,
-                    source_type='recurring_income'
+                    date_transaction=today,
+                    transaction_type='recurring_income',
+                    source_id=source_id,
+                    source_reference=str(self.id),
+                    created_by=self.created_by
                 )
                 
                 # Mettre à jour le solde du compte
-                self.compte_reference.solde += operation.montant
+                self.compte_reference.solde += automatic_transaction.montant
                 self.compte_reference.save()
             
             # Mettre à jour la date de versement pour la prochaine occurrence

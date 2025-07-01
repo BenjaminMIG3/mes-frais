@@ -3,11 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Q, Sum, Avg
+from django.db.models import Q, Sum, Avg, Count
 from datetime import date, timedelta
 from decimal import Decimal
 
-from my_frais.models import BudgetProjection, Account, DirectDebit, RecurringIncome, Operation
+from my_frais.models import BudgetProjection, Account, DirectDebit, RecurringIncome, Operation, AutomaticTransaction
 from my_frais.serializers.budget_projection_serializer import (
     BudgetProjectionSerializer, BudgetProjectionCalculatorSerializer, BudgetSummarySerializer
 )
@@ -135,16 +135,17 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
         elif periode_projection < 1:
             periode_projection = 1
         
+        # Optimisation des requêtes avec select_related et prefetch_related
         if user.is_staff:
-            comptes = Account.objects.all()
-            prelevements = DirectDebit.objects.filter(actif=True)
-            revenus = RecurringIncome.objects.filter(actif=True)
-            operations = Operation.objects.all()
+            comptes = Account.objects.select_related('user').all()
+            prelevements = DirectDebit.objects.select_related('compte_reference', 'compte_reference__user').filter(actif=True)
+            revenus = RecurringIncome.objects.select_related('compte_reference', 'compte_reference__user').filter(actif=True)
+            operations = Operation.objects.select_related('compte_reference', 'compte_reference__user').all()
         else:
-            comptes = Account.objects.filter(user=user)
-            prelevements = DirectDebit.objects.filter(compte_reference__user=user, actif=True)
-            revenus = RecurringIncome.objects.filter(compte_reference__user=user, actif=True)
-            operations = Operation.objects.filter(compte_reference__user=user)
+            comptes = Account.objects.select_related('user').filter(user=user)
+            prelevements = DirectDebit.objects.select_related('compte_reference', 'compte_reference__user').filter(compte_reference__user=user, actif=True)
+            revenus = RecurringIncome.objects.select_related('compte_reference', 'compte_reference__user').filter(compte_reference__user=user, actif=True)
+            operations = Operation.objects.select_related('compte_reference', 'compte_reference__user').filter(compte_reference__user=user)
         
         # Calculs des totaux
         solde_total = sum(compte.solde for compte in comptes)
@@ -337,9 +338,8 @@ class BudgetProjectionViewSet(viewsets.ModelViewSet):
             },
             'metriques': {
                 'ratio_revenus_prelevements': float(revenus_mensuels / prelevements_mensuels) if prelevements_mensuels > 0 else None,
-                'couverture_solde_mois': float(solde_total / prelevements_mensuels) if prelevements_mensuels > 0 else None,
-                'total_operations_mois': operations_mois.count(),
-                'moyenne_operation': float(operations_mois.aggregate(avg=Avg('montant'))['avg'] or 0) if operations_mois.count() > 0 else 0
+                'taux_epargne': float(solde_mensuel_estime / revenus_mensuels * 100) if revenus_mensuels > 0 else None,
+                'seuil_securite_mois': int(solde_total / prelevements_mensuels) if prelevements_mensuels > 0 else None
             }
         })
     

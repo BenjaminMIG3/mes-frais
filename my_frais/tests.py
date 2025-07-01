@@ -8,14 +8,16 @@ from dateutil.relativedelta import relativedelta
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch, MagicMock
+from django.utils import timezone
 
-from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection
+from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection, AutomatedTask, AutomaticTransaction
 from my_frais.serializers.account_serializer import AccountSerializer, AccountListSerializer, AccountSummarySerializer
 from my_frais.serializers.operation_serializer import OperationSerializer, OperationListSerializer
 from my_frais.serializers.direct_debit_serializer import DirectDebitSerializer
 from my_frais.serializers.recurring_income_serializer import RecurringIncomeSerializer
 from my_frais.serializers.budget_projection_serializer import BudgetProjectionSerializer
 from auth_api.jwt_auth import generate_tokens
+from my_frais.services import AutomaticTransactionService, BudgetProjectionService
 
 
 class AccountModelTestCase(TestCase):
@@ -223,23 +225,51 @@ class DirectDebitModelTestCase(TestCase):
             created_by=self.user
         )
         
-        # Vérifier qu'une opération a été créée automatiquement
-        operations = Operation.objects.filter(
-            source_type='direct_debit',
+        # Vérifier qu'une transaction automatique a été créée
+        transactions = AutomaticTransaction.objects.filter(
+            transaction_type='direct_debit',
             description__contains="Prélèvement automatique"
         )
-        self.assertEqual(operations.count(), 1)
+        self.assertEqual(transactions.count(), 1)
+        
+        # Vérifier que le solde du compte a été mis à jour
+        self.account.refresh_from_db()
+        expected_balance = Decimal('1000.00') - Decimal('100.00')  # Solde initial - prélèvement
+        self.assertEqual(self.account.solde, expected_balance)
         
         # Essayer de traiter à nouveau manuellement - ne devrait pas créer de doublon
         processed = direct_debit.process_due_payments()
         self.assertFalse(processed)  # Devrait retourner False car déjà traité
         
-        # Vérifier qu'il n'y a toujours qu'une seule opération
-        operations_after = Operation.objects.filter(
-            source_type='direct_debit',
+        # Vérifier qu'il n'y a toujours qu'une seule transaction
+        transactions_after = AutomaticTransaction.objects.filter(
+            transaction_type='direct_debit',
             description__contains="Prélèvement automatique"
         )
-        self.assertEqual(operations_after.count(), 1)
+        self.assertEqual(transactions_after.count(), 1)
+
+    def test_direct_debit_future_date_no_processing(self):
+        """Test qu'un prélèvement futur n'est pas traité automatiquement"""
+        future_date = date.today() + timedelta(days=30)
+        
+        direct_debit = DirectDebit.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('100.00'),
+            description="Test futur",
+            date_prelevement=future_date,
+            frequence='Mensuel',
+            created_by=self.user
+        )
+        
+        # Vérifier qu'aucune transaction automatique n'a été créée
+        transactions = AutomaticTransaction.objects.filter(
+            transaction_type='direct_debit'
+        )
+        self.assertEqual(transactions.count(), 0)
+        
+        # Vérifier que le solde du compte n'a pas changé
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.solde, Decimal('1000.00'))
 
 
 class RecurringIncomeModelTestCase(TestCase):
@@ -342,23 +372,28 @@ class RecurringIncomeModelTestCase(TestCase):
             created_by=self.user
         )
         
-        # Vérifier qu'une opération a été créée automatiquement
-        operations = Operation.objects.filter(
-            source_type='recurring_income',
+        # Vérifier qu'une transaction automatique a été créée
+        transactions = AutomaticTransaction.objects.filter(
+            transaction_type='recurring_income',
             description__contains="Revenu automatique"
         )
-        self.assertEqual(operations.count(), 1)
+        self.assertEqual(transactions.count(), 1)
+        
+        # Vérifier que le solde du compte a été mis à jour
+        self.account.refresh_from_db()
+        expected_balance = Decimal('1000.00') + Decimal('2500.00')  # Solde initial + revenu
+        self.assertEqual(self.account.solde, expected_balance)
         
         # Essayer de traiter à nouveau manuellement - ne devrait pas créer de doublon
         processed = income.process_due_income()
         self.assertFalse(processed)  # Devrait retourner False car déjà traité
         
-        # Vérifier qu'il n'y a toujours qu'une seule opération
-        operations_after = Operation.objects.filter(
-            source_type='recurring_income',
+        # Vérifier qu'il n'y a toujours qu'une seule transaction
+        transactions_after = AutomaticTransaction.objects.filter(
+            transaction_type='recurring_income',
             description__contains="Revenu automatique"
         )
-        self.assertEqual(operations_after.count(), 1)
+        self.assertEqual(transactions_after.count(), 1)
 
 
 class BudgetProjectionModelTestCase(TestCase):
@@ -796,7 +831,7 @@ class AccountViewSetTestCase(APITestCase):
             self.assertIn('total_operations', compte)
 
 
-class MyFraisIntegrationTestCase(APITestCase):
+class MyFraisIntegrationTestCase(TestCase):
     """Tests d'intégration pour l'application my_frais"""
     
     def setUp(self):
@@ -813,84 +848,74 @@ class MyFraisIntegrationTestCase(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
     
     def test_complete_financial_flow(self):
-        """Test du flux financier complet : compte -> opérations -> prélèvements -> revenus -> projections"""
-        # 1. Créer un compte
-        account_data = {
-            'user': self.user.id,
-            'nom': 'Compte Principal',
-            'solde': '2000.00'
-        }
-        account_response = self.client.post('/api/v1/accounts/', account_data, format='json')
-        self.assertEqual(account_response.status_code, status.HTTP_201_CREATED)
-        account_id = account_response.data['id']
+        """Test d'un flux financier complet avec le nouveau système"""
+        # Désactiver temporairement les signaux pour éviter le traitement automatique
+        from django.db.models.signals import post_save
+        from my_frais.models import trigger_payment_processing, trigger_income_processing
         
-        # 2. Créer des opérations
-        operations_data = [
-            {
-                'compte_reference': account_id,
-                'montant': '2500.00',
-                'description': 'Salaire'
-            },
-            {
-                'compte_reference': account_id,
-                'montant': '-120.00',
-                'description': 'Courses'
-            },
-            {
-                'compte_reference': account_id,
-                'montant': '-80.00',
-                'description': 'Essence'
-            }
-        ]
+        # Désactiver les signaux
+        post_save.disconnect(trigger_payment_processing, sender=DirectDebit)
+        post_save.disconnect(trigger_income_processing, sender=RecurringIncome)
         
-        for op_data in operations_data:
-            response = self.client.post('/api/v1/operations/', op_data, format='json')
-            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        
-        # 3. Créer un prélèvement automatique
-        direct_debit_data = {
-            'compte_reference': account_id,
-            'montant': '50.00',
-            'description': 'Électricité',
-            'date_prelevement': (date.today() + timedelta(days=5)).isoformat(),
-            'frequence': 'Mensuel'
-        }
-        dd_response = self.client.post('/api/v1/direct-debits/', direct_debit_data, format='json')
-        self.assertEqual(dd_response.status_code, status.HTTP_201_CREATED)
-        
-        # 4. Créer un revenu récurrent
-        income_data = {
-            'compte_reference': account_id,
-            'montant': '2500.00',
-            'description': 'Salaire Net',
-            'date_premier_versement': date.today().isoformat(),
-            'frequence': 'Mensuel',
-            'type_revenu': 'Salaire'
-        }
-        income_response = self.client.post('/api/v1/recurring-incomes/', income_data, format='json')
-        self.assertEqual(income_response.status_code, status.HTTP_201_CREATED)
-        
-        # 5. Créer une projection de budget
-        projection_data = {
-            'compte_reference': account_id,
-            'date_projection': date.today().isoformat(),
-            'periode_projection': 6
-            # On retire projections_data car elle sera calculée automatiquement
-        }
-        projection_response = self.client.post('/api/v1/budget-projections/', projection_data, format='json')
-        self.assertEqual(projection_response.status_code, status.HTTP_201_CREATED)
-        
-        # 6. Vérifier les statistiques du compte
-        stats_response = self.client.get(f'/api/v1/accounts/{account_id}/statistics/')
-        self.assertEqual(stats_response.status_code, status.HTTP_200_OK)
-        self.assertIn('statistics', stats_response.data)
-        # Au moins 3 opérations créées (des opérations automatiques peuvent s'ajouter)
-        self.assertGreaterEqual(stats_response.data['statistics']['total_operations'], 3)
-        
-        # 7. Vérifier le résumé des comptes
-        summary_response = self.client.get('/api/v1/accounts/summary/')
-        self.assertEqual(summary_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(summary_response.data['total_comptes'], 1)
+        try:
+            # 1. Créer un prélèvement automatique
+            direct_debit = DirectDebit.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('100.00'),
+                description='Électricité',
+                date_prelevement=date.today(),
+                frequence='Mensuel',
+                created_by=self.user
+            )
+            
+            # 2. Créer un revenu récurrent
+            income = RecurringIncome.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('2500.00'),
+                description='Salaire Net',
+                date_premier_versement=date.today(),
+                frequence='Mensuel',
+                type_revenu='Salaire',
+                created_by=self.user
+            )
+            
+            # 3. Vérifier qu'aucune transaction automatique n'a été créée (signaux désactivés)
+            transactions = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions.count(), 0)
+            
+            # 4. Vérifier que le solde du compte n'a pas changé
+            self.account.refresh_from_db()
+            self.assertEqual(self.account.solde, Decimal('1000.00'))
+            
+            # 5. Traiter les transactions avec le service
+            result = AutomaticTransactionService.process_daily_transactions()
+            self.assertEqual(result['total'], 2)
+            
+            # 6. Vérifier que les transactions automatiques ont été créées
+            transactions = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions.count(), 2)
+            
+            # 7. Vérifier que le solde du compte a été mis à jour
+            self.account.refresh_from_db()
+            expected_balance = Decimal('1000.00') - Decimal('100.00') + Decimal('2500.00')
+            self.assertEqual(self.account.solde, expected_balance)
+            
+            # 8. Vérifier qu'aucune opération n'a été créée (nouveau système)
+            operations = Operation.objects.all()
+            self.assertEqual(operations.count(), 0)
+            
+            # 9. Traiter à nouveau - ne devrait pas créer de doublons
+            result = AutomaticTransactionService.process_daily_transactions()
+            self.assertEqual(result['total'], 0)  # Aucune nouvelle transaction
+            
+            # 10. Vérifier qu'il n'y a toujours que 2 transactions
+            transactions_after = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions_after.count(), 2)
+            
+        finally:
+            # Réactiver les signaux
+            post_save.connect(trigger_payment_processing, sender=DirectDebit)
+            post_save.connect(trigger_income_processing, sender=RecurringIncome)
 
 
 class BudgetProjectionAPITestCase(APITestCase):
@@ -999,3 +1024,378 @@ class BudgetProjectionAPITestCase(APITestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['projections']['periode_mois'], 1)  # Limitée à 1
+
+
+class AutomaticTransactionModelTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom='Compte de test',
+            solde=Decimal('1000.00'),
+            created_by=self.user
+        )
+
+    def test_automatic_transaction_creation(self):
+        """Test de création d'une transaction automatique"""
+        transaction = AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('-50.00'),
+            description='Prélèvement automatique - Test',
+            date_transaction=date.today(),
+            transaction_type='direct_debit',
+            source_id='test_source_123',
+            source_reference='123',
+            created_by=self.user
+        )
+        
+        self.assertEqual(transaction.montant, Decimal('-50.00'))
+        self.assertEqual(transaction.transaction_type, 'direct_debit')
+        self.assertEqual(transaction.source_id, 'test_source_123')
+        self.assertTrue(transaction.processed)
+
+    def test_automatic_transaction_str_representation(self):
+        """Test de la représentation string de la transaction automatique"""
+        transaction = AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('-50.00'),
+            description='Prélèvement automatique - Test',
+            date_transaction=date.today(),
+            transaction_type='direct_debit',
+            source_id='test_source_123',
+            source_reference='123',
+            created_by=self.user
+        )
+        
+        expected = f"Prélèvement automatique - Test - -50.00€ ({date.today()})"
+        self.assertEqual(str(transaction), expected)
+
+    def test_automatic_transaction_unique_constraint(self):
+        """Test de la contrainte d'unicité sur source_id et transaction_type"""
+        # Créer la première transaction
+        AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('-50.00'),
+            description='Prélèvement automatique - Test',
+            date_transaction=date.today(),
+            transaction_type='direct_debit',
+            source_id='test_source_123',
+            source_reference='123',
+            created_by=self.user
+        )
+        
+        # Essayer de créer une deuxième transaction avec le même source_id et type
+        with self.assertRaises(Exception):  # IntegrityError ou ValidationError
+            AutomaticTransaction.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('-50.00'),
+                description='Prélèvement automatique - Test 2',
+                date_transaction=date.today(),
+                transaction_type='direct_debit',
+                source_id='test_source_123',  # Même source_id
+                source_reference='123',
+                created_by=self.user
+            )
+
+
+class AutomaticTransactionServiceTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom='Compte de test',
+            solde=Decimal('1000.00'),
+            created_by=self.user
+        )
+
+    def test_process_daily_transactions(self):
+        """Test du traitement quotidien des transactions automatiques"""
+        # Créer un prélèvement et un revenu à échéance
+        # Désactiver temporairement les signaux pour éviter le traitement automatique
+        from django.db.models.signals import post_save
+        from my_frais.models import trigger_payment_processing, trigger_income_processing
+        
+        # Désactiver les signaux
+        post_save.disconnect(trigger_payment_processing, sender=DirectDebit)
+        post_save.disconnect(trigger_income_processing, sender=RecurringIncome)
+        
+        try:
+            DirectDebit.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('100.00'),
+                description='Test prélèvement',
+                date_prelevement=date.today(),
+                frequence='Mensuel',
+                created_by=self.user
+            )
+            
+            RecurringIncome.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('2000.00'),
+                description='Salaire',
+                type_revenu='Salaire',
+                date_premier_versement=date.today(),
+                frequence='Mensuel',
+                created_by=self.user
+            )
+            
+            # Vérifier qu'aucune transaction n'a été créée automatiquement
+            transactions_before = AutomaticTransaction.objects.count()
+            self.assertEqual(transactions_before, 0)
+            
+            # Traiter les transactions avec le service
+            result = AutomaticTransactionService.process_daily_transactions()
+            
+            self.assertEqual(result['total'], 2)
+            self.assertEqual(result['payments'], 1)
+            self.assertEqual(result['incomes'], 1)
+            self.assertGreater(result['execution_duration'], 0)
+            
+            # Vérifier que les transactions ont été créées
+            transactions = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions.count(), 2)
+            
+            # Vérifier que le solde du compte a été mis à jour
+            self.account.refresh_from_db()
+            expected_balance = Decimal('1000.00') - Decimal('100.00') + Decimal('2000.00')
+            self.assertEqual(self.account.solde, expected_balance)
+            
+        finally:
+            # Réactiver les signaux
+            post_save.connect(trigger_payment_processing, sender=DirectDebit)
+            post_save.connect(trigger_income_processing, sender=RecurringIncome)
+
+    def test_get_transaction_summary(self):
+        """Test du résumé des transactions automatiques"""
+        # Créer quelques transactions automatiques
+        AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('-100.00'),
+            description='Prélèvement test',
+            date_transaction=date.today(),
+            transaction_type='direct_debit',
+            source_id='test_1',
+            source_reference='1',
+            created_by=self.user
+        )
+        
+        AutomaticTransaction.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('2000.00'),
+            description='Revenu test',
+            date_transaction=date.today(),
+            transaction_type='recurring_income',
+            source_id='test_2',
+            source_reference='2',
+            created_by=self.user
+        )
+        
+        summary = AutomaticTransactionService.get_transaction_summary(self.account)
+        
+        self.assertEqual(summary['total_transactions'], 2)
+        self.assertEqual(summary['payments_count'], 1)
+        self.assertEqual(summary['incomes_count'], 1)
+        self.assertEqual(summary['payments_total'], Decimal('-100.00'))
+        self.assertEqual(summary['incomes_total'], Decimal('2000.00'))
+        self.assertEqual(summary['net_impact'], Decimal('1900.00'))
+
+
+class BudgetProjectionServiceTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom='Compte de test',
+            solde=Decimal('1000.00'),
+            created_by=self.user
+        )
+
+    def test_calculate_projections(self):
+        """Test du calcul des projections de budget"""
+        # Créer un prélèvement et un revenu
+        DirectDebit.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('100.00'),
+            description='Test prélèvement',
+            date_prelevement=date.today(),
+            frequence='Mensuel',
+            created_by=self.user
+        )
+        
+        RecurringIncome.objects.create(
+            compte_reference=self.account,
+            montant=Decimal('2000.00'),
+            description='Salaire',
+            type_revenu='Salaire',
+            date_premier_versement=date.today(),
+            frequence='Mensuel',
+            created_by=self.user
+        )
+        
+        # Calculer les projections sur 3 mois
+        projections = BudgetProjectionService.calculate_projections(
+            account=self.account,
+            start_date=date.today(),
+            period_months=3
+        )
+        
+        self.assertEqual(len(projections), 3)
+        
+        # Vérifier que chaque mois a des transactions
+        for projection in projections:
+            self.assertGreaterEqual(projection['transactions_count'], 0)
+            self.assertIn('solde_debut', projection)
+            self.assertIn('solde_fin', projection)
+            self.assertIn('total_transactions', projection)
+
+    def test_calculate_projections_without_transactions(self):
+        """Test du calcul des projections sans transactions automatiques"""
+        projections = BudgetProjectionService.calculate_projections(
+            account=self.account,
+            start_date=date.today(),
+            period_months=3
+        )
+        
+        self.assertEqual(len(projections), 3)
+        
+        # Vérifier que les soldes restent constants
+        for projection in projections:
+            self.assertEqual(projection['solde_debut'], float(self.account.solde))
+            self.assertEqual(projection['solde_fin'], float(self.account.solde))
+            self.assertEqual(projection['transactions_count'], 0)
+            self.assertEqual(projection['total_transactions'], 0.0)
+
+
+class AutomatedTaskModelTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+
+    def test_automated_task_creation(self):
+        """Test de création d'une tâche automatique"""
+        task = AutomatedTask.log_task(
+            task_type='BOTH_PROCESSING',
+            status='SUCCESS',
+            processed_count=5,
+            execution_duration=1.5,
+            details={'test': 'data'},
+            user=self.user
+        )
+        
+        self.assertEqual(task.task_type, 'BOTH_PROCESSING')
+        self.assertEqual(task.status, 'SUCCESS')
+        self.assertEqual(task.processed_count, 5)
+        self.assertEqual(task.execution_duration, Decimal('1.5'))
+        self.assertEqual(task.details, {'test': 'data'})
+
+    def test_automated_task_str_representation(self):
+        """Test de la représentation string de la tâche automatique"""
+        task = AutomatedTask.log_task(
+            task_type='PAYMENT_PROCESSING',
+            status='SUCCESS',
+            processed_count=2,
+            user=self.user
+        )
+        
+        expected_start = "Traitement des prélèvements"
+        self.assertIn(expected_start, str(task))
+
+
+class MyFraisIntegrationTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        self.account = Account.objects.create(
+            user=self.user,
+            nom='Compte de test',
+            solde=Decimal('1000.00'),
+            created_by=self.user
+        )
+
+    def test_complete_financial_flow(self):
+        """Test d'un flux financier complet avec le nouveau système"""
+        # Désactiver temporairement les signaux pour éviter le traitement automatique
+        from django.db.models.signals import post_save
+        from my_frais.models import trigger_payment_processing, trigger_income_processing
+        
+        # Désactiver les signaux
+        post_save.disconnect(trigger_payment_processing, sender=DirectDebit)
+        post_save.disconnect(trigger_income_processing, sender=RecurringIncome)
+        
+        try:
+            # 1. Créer un prélèvement automatique
+            direct_debit = DirectDebit.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('100.00'),
+                description='Électricité',
+                date_prelevement=date.today(),
+                frequence='Mensuel',
+                created_by=self.user
+            )
+            
+            # 2. Créer un revenu récurrent
+            income = RecurringIncome.objects.create(
+                compte_reference=self.account,
+                montant=Decimal('2500.00'),
+                description='Salaire Net',
+                date_premier_versement=date.today(),
+                frequence='Mensuel',
+                type_revenu='Salaire',
+                created_by=self.user
+            )
+            
+            # 3. Vérifier qu'aucune transaction automatique n'a été créée (signaux désactivés)
+            transactions = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions.count(), 0)
+            
+            # 4. Vérifier que le solde du compte n'a pas changé
+            self.account.refresh_from_db()
+            self.assertEqual(self.account.solde, Decimal('1000.00'))
+            
+            # 5. Traiter les transactions avec le service
+            result = AutomaticTransactionService.process_daily_transactions()
+            self.assertEqual(result['total'], 2)
+            
+            # 6. Vérifier que les transactions automatiques ont été créées
+            transactions = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions.count(), 2)
+            
+            # 7. Vérifier que le solde du compte a été mis à jour
+            self.account.refresh_from_db()
+            expected_balance = Decimal('1000.00') - Decimal('100.00') + Decimal('2500.00')
+            self.assertEqual(self.account.solde, expected_balance)
+            
+            # 8. Vérifier qu'aucune opération n'a été créée (nouveau système)
+            operations = Operation.objects.all()
+            self.assertEqual(operations.count(), 0)
+            
+            # 9. Traiter à nouveau - ne devrait pas créer de doublons
+            result = AutomaticTransactionService.process_daily_transactions()
+            self.assertEqual(result['total'], 0)  # Aucune nouvelle transaction
+            
+            # 10. Vérifier qu'il n'y a toujours que 2 transactions
+            transactions_after = AutomaticTransaction.objects.all()
+            self.assertEqual(transactions_after.count(), 2)
+            
+        finally:
+            # Réactiver les signaux
+            post_save.connect(trigger_payment_processing, sender=DirectDebit)
+            post_save.connect(trigger_income_processing, sender=RecurringIncome)

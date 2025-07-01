@@ -28,11 +28,11 @@ class OperationViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
     
     def get_queryset(self):
-        """Filtrer les opérations selon l'utilisateur connecté"""
+        """Filtrer les opérations selon l'utilisateur connecté avec optimisation"""
         user = self.request.user
         if user.is_staff:
-            return Operation.objects.all()
-        return Operation.objects.filter(compte_reference__user=user)
+            return Operation.objects.select_related('compte_reference', 'compte_reference__user', 'created_by').all()
+        return Operation.objects.select_related('compte_reference', 'compte_reference__user', 'created_by').filter(compte_reference__user=user)
     
     def get_serializer_class(self):
         """Utiliser le serializer approprié selon l'action"""
@@ -212,12 +212,12 @@ class OperationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def bulk_create(self, request):
-        """Créer plusieurs opérations en une seule requête"""
+        """Créer plusieurs opérations en lot"""
         operations_data = request.data.get('operations', [])
         
         if not operations_data:
             return Response(
-                {'error': 'Aucune opération fournie'}, 
+                {'error': 'Aucune opération fournie'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -226,13 +226,10 @@ class OperationViewSet(viewsets.ModelViewSet):
         
         for i, operation_data in enumerate(operations_data):
             try:
-                serializer = OperationSerializer(
-                    data=operation_data, 
-                    context={'request': request}
-                )
+                serializer = self.get_serializer(data=operation_data)
                 if serializer.is_valid():
                     operation = serializer.save(created_by=request.user)
-                    created_operations.append(operation)
+                    created_operations.append(serializer.data)
                 else:
                     errors.append({
                         'index': i,
@@ -249,6 +246,6 @@ class OperationViewSet(viewsets.ModelViewSet):
         return Response({
             'created_count': len(created_operations),
             'error_count': len(errors),
-            'created_operations': OperationListSerializer(created_operations, many=True).data,
+            'created_operations': created_operations,
             'errors': errors
         }, status=status.HTTP_201_CREATED if created_operations else status.HTTP_400_BAD_REQUEST) 
