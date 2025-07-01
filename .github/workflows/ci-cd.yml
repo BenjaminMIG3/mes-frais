@@ -66,7 +66,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mysql-client
           # Installation de pymongo pour les tests de connectivité
-          pip3 install pymongo
+          python3 -m pip install --user pymongo
 
       - name: Create and activate virtualenv
         run: |
@@ -82,24 +82,27 @@ jobs:
       - name: Wait for services to be ready
         run: |
           echo "Attente que les services soient prêts..."
+          
           # Attendre MySQL
+          echo "Test de connexion MySQL..."
           for i in {1..30}; do
             if mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "SELECT 1;" 2>/dev/null; then
-              echo "MySQL est prêt !"
+              echo "✅ MySQL est prêt !"
               break
             fi
-            echo "Attente MySQL... ($i/30)"
+            echo "⏳ Attente MySQL... ($i/30)"
             sleep 2
           done
           
           # Attendre MongoDB (test avec Python/pymongo)
-          for i in {1..30}; do
-            if python3 -c "import pymongo; pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=1000).admin.command('ping')" 2>/dev/null; then
-              echo "MongoDB est prêt !"
+          echo "Test de connexion MongoDB..."
+          for i in {1..20}; do
+            if python3 -c "import pymongo; pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=2000).admin.command('ping')" 2>/dev/null; then
+              echo "✅ MongoDB est prêt !"
               break
             fi
-            echo "Attente MongoDB... ($i/30)"
-            sleep 2
+            echo "⏳ Attente MongoDB... ($i/20)"
+            sleep 3
           done
 
       - name: Check services
@@ -110,15 +113,39 @@ jobs:
           mysql -h 127.0.0.1 -P 3306 -u test_user -ptest_password -e "SELECT 'MySQL OK';"
           python3 -c "import pymongo; print('MongoDB OK:', pymongo.MongoClient('mongodb://127.0.0.1:27017/', serverSelectionTimeoutMS=2000).admin.command('ping'))"
 
+      - name: Debug database connection
+        env:
+          SECRET_KEY: test-secret-key-for-github-actions
+          DB_NAME: mes_frais
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          MONGODB_HOST: 127.0.0.1
+          MONGODB_PORT: 27017
+          MONGODB_DATABASE: mes_frais_logs
+          MONGODB_USERNAME: test_user
+          MONGODB_PASSWORD: test_password
+          MONGODB_AUTH_SOURCE: admin
+        run: |
+          echo "Variables d'environnement pour Django:"
+          echo "DB_HOST: $DB_HOST"
+          echo "DB_PORT: $DB_PORT"
+          echo "DB_NAME: $DB_NAME"
+          echo "DB_USER: $DB_USER"
+          
+          echo "Test final de connectivité MySQL avec les mêmes paramètres:"
+          mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD -e "SHOW DATABASES;" || echo "❌ Échec connexion MySQL"
+
       - name: Run migrations
         env:
           SECRET_KEY: test-secret-key-for-github-actions
           DB_NAME: mes_frais
           DB_USER: test_user
           DB_PASSWORD: test_password
-          DB_HOST: localhost
+          DB_HOST: 127.0.0.1
           DB_PORT: 3306
-          MONGODB_HOST: localhost
+          MONGODB_HOST: 127.0.0.1
           MONGODB_PORT: 27017
           MONGODB_DATABASE: mes_frais_logs
           MONGODB_USERNAME: test_user
@@ -134,9 +161,9 @@ jobs:
           DB_NAME: mes_frais
           DB_USER: test_user
           DB_PASSWORD: test_password
-          DB_HOST: localhost
+          DB_HOST: 127.0.0.1
           DB_PORT: 3306
-          MONGODB_HOST: localhost
+          MONGODB_HOST: 127.0.0.1
           MONGODB_PORT: 27017
           MONGODB_DATABASE: mes_frais_logs
           MONGODB_USERNAME: test_user
@@ -183,12 +210,12 @@ jobs:
       - name: Collect static files
         env:
           SECRET_KEY: test-secret-key-for-github-actions
-          DB_NAME: sqlite_test
+          DB_NAME: ":memory:"
           DB_USER: ""
           DB_PASSWORD: ""
           DB_HOST: ""
           DB_PORT: ""
-          MONGODB_HOST: localhost
+          MONGODB_HOST: 127.0.0.1
           MONGODB_PORT: 27017
           MONGODB_DATABASE: mes_frais_logs
           MONGODB_USERNAME: ""
@@ -196,7 +223,8 @@ jobs:
           MONGODB_AUTH_SOURCE: ""
         run: |
           source venv/bin/activate
-          python manage.py collectstatic --noinput
+          # Utiliser SQLite en mémoire pour collectstatic (pas besoin de MySQL)
+          python manage.py collectstatic --noinput --settings=core.settings_static
 
       - name: Cache build artifacts
         uses: actions/cache@v3
