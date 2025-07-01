@@ -1,9 +1,10 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
+from django.contrib.admin import AdminSite
 
 # Ajoute les models de models.py
-from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection, AutomatedTask
+from my_frais.models import Account, Operation, DirectDebit, RecurringIncome, BudgetProjection, AutomatedTask, AutomaticTransaction
 
 
 class BaseModelAdmin(admin.ModelAdmin):
@@ -311,6 +312,59 @@ class AutomatedTaskAdmin(admin.ModelAdmin):
 
 
 # Configuration globale de l'admin
-admin.site.site_header = "Administration Mes Frais"
+admin.site.site_header = "Mes Frais - Administration"
 admin.site.site_title = "Mes Frais Admin"
 admin.site.index_title = "Gestion des comptes et opérations"
+
+# Personnalisation de l'admin site pour ajouter les liens MongoDB
+original_get_app_list = admin.site.get_app_list
+
+def get_app_list_with_mongodb(request):
+    app_list = original_get_app_list(request)
+    
+    # Ajouter un lien vers les logs MongoDB
+    if request.user.is_staff:
+        mongodb_app = {
+            'name': 'MongoDB Logs',
+            'app_label': 'mongodb_logs',
+            'app_url': reverse('mongodb_logs:dashboard'),
+            'has_module_perms': True,
+            'models': [
+                {
+                    'name': 'Tableau de bord',
+                    'object_name': 'dashboard',
+                    'admin_url': reverse('mongodb_logs:dashboard'),
+                    'view_only': True,
+                },
+                {
+                    'name': 'Logs d\'authentification',
+                    'object_name': 'auth_events',
+                    'admin_url': reverse('mongodb_logs:auth'),
+                    'view_only': True,
+                },
+                {
+                    'name': 'Logs CRUD',
+                    'object_name': 'crud_events',
+                    'admin_url': reverse('mongodb_logs:crud'),
+                    'view_only': True,
+                },
+                {
+                    'name': 'Logs d\'erreurs',
+                    'object_name': 'errors',
+                    'admin_url': reverse('mongodb_logs:errors'),
+                    'view_only': True,
+                },
+                {
+                    'name': 'Logs métier',
+                    'object_name': 'business_events',
+                    'admin_url': reverse('mongodb_logs:business'),
+                    'view_only': True,
+                },
+            ]
+        }
+        app_list.append(mongodb_app)
+    
+    return app_list
+
+# Remplacer la méthode get_app_list
+admin.site.get_app_list = get_app_list_with_mongodb

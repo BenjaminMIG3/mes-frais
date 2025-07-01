@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.urls import path, include
 
 urlpatterns = [
+    path('admin/mongodb-logs/', include('my_frais.admin_urls')),
     path('admin/', admin.site.urls),
     path('api/v1/', include('auth_api.urls')),
     path('api/v1/', include('my_frais.urls')),

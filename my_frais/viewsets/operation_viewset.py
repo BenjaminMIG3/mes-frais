@@ -9,6 +9,8 @@ from decimal import Decimal
 
 from my_frais.models import Operation, Account
 from my_frais.serializers.operation_serializer import OperationSerializer, OperationListSerializer
+from my_frais.mongodb_service import mongodb_service
+from my_frais.logging_service import app_logger
 
 
 class OperationViewSet(viewsets.ModelViewSet):
@@ -47,19 +49,56 @@ class OperationViewSet(viewsets.ModelViewSet):
         print(f"👤 User: {request.user}")
         print(f"🔑 Auth: {request.auth}")
         
-        serializer = self.get_serializer(data=request.data)
-        
-        if not serializer.is_valid():
-            print(f"❌ ERREUR 400 - Validation échouée:")
-            print(f"📝 Erreurs: {serializer.errors}")
-            print(f"📊 Données reçues: {request.data}")
-            print(f"🎯 Champs requis: {self.get_serializer().Meta.model._meta.get_fields()}")
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        print(f"✅ SUCCÈS - Operation créée: ID {serializer.data.get('id')}")
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        try:
+            serializer = self.get_serializer(data=request.data)
+            
+            if not serializer.is_valid():
+                print(f"❌ ERREUR 400 - Validation échouée:")
+                print(f"📝 Erreurs: {serializer.errors}")
+                print(f"📊 Données reçues: {request.data}")
+                print(f"🎯 Champs requis: {self.get_serializer().Meta.model._meta.get_fields()}")
+                
+                # Log de l'erreur de validation
+                app_logger.log_crud_event(
+                    event_type='create_failed',
+                    model_name='Operation',
+                    user=request.user,
+                    request=request,
+                    new_data=request.data,
+                    old_data=None
+                )
+                
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            print(f"✅ SUCCÈS - Operation créée: ID {serializer.data.get('id')}")
+            
+            # Log de la création réussie
+            app_logger.log_crud_event(
+                event_type='create',
+                model_name='Operation',
+                object_id=serializer.data.get('id'),
+                user=request.user,
+                request=request,
+                new_data=serializer.data,
+                old_data=None
+            )
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+            
+        except Exception as e:
+            print(f"❌ ERREUR - Exception lors de la création: {str(e)}")
+            
+            # Log de l'erreur
+            app_logger.log_error(
+                error=e,
+                user=request.user,
+                request=request,
+                context={'action': 'create_operation', 'data': request.data}
+            )
+            
+            return Response({'message': 'Erreur interne du serveur.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def perform_create(self, serializer):
         """Créer une opération avec l'utilisateur connecté comme créateur"""
@@ -67,14 +106,52 @@ class OperationViewSet(viewsets.ModelViewSet):
     
     def perform_update(self, serializer):
         """Mettre à jour une opération"""
+        # Sauvegarder les anciennes données pour le log
+        old_data = {
+            'montant': serializer.instance.montant,
+            'description': serializer.instance.description,
+            'compte_reference_id': serializer.instance.compte_reference.id if serializer.instance.compte_reference else None
+        }
+        
         serializer.save()
+        
+        # Log de la mise à jour
+        app_logger.log_crud_event(
+            event_type='update',
+            model_name='Operation',
+            object_id=serializer.instance.id,
+            user=self.request.user,
+            request=self.request,
+            old_data=old_data,
+            new_data=serializer.data
+        )
     
     def perform_destroy(self, instance):
         """Supprimer une opération avec ajustement du solde"""
+        # Sauvegarder les données avant suppression pour le log
+        old_data = {
+            'id': instance.id,
+            'montant': instance.montant,
+            'description': instance.description,
+            'compte_reference_id': instance.compte_reference.id if instance.compte_reference else None,
+            'created_by_id': instance.created_by.id if instance.created_by else None
+        }
+        
         # Utiliser la méthode delete du serializer pour ajuster le solde
         from my_frais.serializers.operation_serializer import OperationSerializer
         serializer = OperationSerializer(instance, context={'request': self.request})
         serializer.delete(instance)
+        
+        # Log de la suppression
+        app_logger.log_crud_event(
+            event_type='delete',
+            model_name='Operation',
+            object_id=instance.id,
+            user=self.request.user,
+            request=self.request,
+            old_data=old_data,
+            new_data=None
+        )
     
     @action(detail=False, methods=['get'])
     def statistics(self, request):

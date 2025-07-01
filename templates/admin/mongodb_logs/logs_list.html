@@ -1,0 +1,239 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block extrastyle %}
+<style>
+    .logs-container {
+        padding: 20px;
+        background: #f5f5f5;
+        min-height: 100vh;
+    }
+    .logs-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        background: #ffffff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .logs-header h1 {
+        color: #2c3e50;
+        margin: 0;
+        font-size: 1.8em;
+    }
+    .back-link {
+        display: inline-block;
+        padding: 12px 18px;
+        background: #3498db;
+        color: #ffffff;
+        text-decoration: none;
+        border-radius: 5px;
+        font-weight: 500;
+        transition: background-color 0.3s ease;
+    }
+    .back-link:hover {
+        background: #2980b9;
+        color: #ffffff;
+    }
+    .log-item {
+        background: #ffffff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .log-header {
+        background: #34495e;
+        color: #ffffff;
+        padding: 15px;
+        border-bottom: 1px solid #ddd;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .log-timestamp {
+        color: #ecf0f1;
+        font-size: 0.9em;
+        font-weight: 500;
+    }
+    .log-event {
+        font-weight: bold;
+        color: #ffffff;
+        font-size: 1.1em;
+    }
+    .log-user {
+        color: #ffffff;
+        font-weight: 500;
+    }
+    .log-content {
+        padding: 20px;
+        background: #ffffff;
+    }
+    .log-details {
+        margin-top: 10px;
+        padding: 12px;
+        background: #f8f9fa;
+        border-radius: 5px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9em;
+        white-space: pre-wrap;
+        max-height: 200px;
+        overflow-y: auto;
+        color: #2c3e50;
+        border-left: 3px solid #3498db;
+    }
+    .log-request {
+        margin-top: 10px;
+        padding: 12px;
+        background: #e8f4fd;
+        border-radius: 5px;
+        font-size: 0.9em;
+        color: #2c3e50;
+        border-left: 3px solid #3498db;
+    }
+    .pagination {
+        margin-top: 20px;
+        text-align: center;
+        background: #ffffff;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .pagination a {
+        display: inline-block;
+        padding: 10px 15px;
+        margin: 0 5px;
+        background: #3498db;
+        color: #ffffff;
+        text-decoration: none;
+        border-radius: 5px;
+        font-weight: 500;
+        transition: background-color 0.3s ease;
+    }
+    .pagination a:hover {
+        background: #2980b9;
+        color: #ffffff;
+    }
+    .pagination .current {
+        background: #2c3e50;
+        color: #ffffff;
+        padding: 10px 15px;
+        border-radius: 5px;
+        font-weight: 500;
+    }
+    .error-log {
+        border-left: 4px solid #e74c3c;
+        background: #fdf2f2;
+    }
+    .error-log .log-header {
+        background: #e74c3c;
+    }
+    .success-log {
+        border-left: 4px solid #27ae60;
+        background: #f0f9f0;
+    }
+    .success-log .log-header {
+        background: #27ae60;
+    }
+    .warning-log {
+        border-left: 4px solid #f39c12;
+        background: #fef9e7;
+    }
+    .warning-log .log-header {
+        background: #f39c12;
+    }
+    .log-item p {
+        color: #34495e;
+        margin: 10px 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="logs-container">
+    <div class="logs-header">
+        <h1>{{ title }}</h1>
+        <a href="{% url 'mongodb_logs:dashboard' %}" class="back-link">← Retour au tableau de bord</a>
+    </div>
+
+    {% if logs %}
+        {% for log in logs %}
+        <div class="log-item {% if log.event_type == 'error' %}error-log{% elif log.success %}success-log{% else %}warning-log{% endif %}">
+            <div class="log-header">
+                <div>
+                    <div class="log-timestamp">{{ log.timestamp_display }}</div>
+                    <div class="log-event">{{ log.event_type }}</div>
+                    <div class="log-user">{{ log.user_display|default:"Utilisateur anonyme" }}</div>
+                </div>
+                <div>
+                    {% if log.success is not None %}
+                        <span class="{% if log.success %}success-log{% else %}error-log{% endif %}">
+                            {% if log.success %}✅ Succès{% else %}❌ Échec{% endif %}
+                        </span>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <div class="log-content">
+                {% if log.request_display %}
+                <div class="log-request">
+                    <strong>Requête:</strong> {{ log.request_display }}
+                </div>
+                {% endif %}
+                
+                {% if log.details_display %}
+                <div class="log-details">
+                    <strong>Détails:</strong>
+{{ log.details_display }}
+                </div>
+                {% endif %}
+                
+                {% if log.old_data_display %}
+                <div class="log-details">
+                    <strong>Anciennes données:</strong>
+{{ log.old_data_display }}
+                </div>
+                {% endif %}
+                
+                {% if log.new_data_display %}
+                <div class="log-details">
+                    <strong>Nouvelles données:</strong>
+{{ log.new_data_display }}
+                </div>
+                {% endif %}
+                
+                {% if log.error_traceback %}
+                <div class="log-details">
+                    <strong>Stack trace:</strong>
+{{ log.error_traceback }}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        
+        <div class="pagination">
+            {% if page > 1 %}
+                <a href="?page={{ page|add:'-1' }}&limit={{ limit }}">← Précédent</a>
+            {% endif %}
+            
+            <span class="current">Page {{ page }}</span>
+            
+            {% if logs|length == limit %}
+                <a href="?page={{ page|add:'1' }}&limit={{ limit }}">Suivant →</a>
+            {% endif %}
+        </div>
+    {% else %}
+        <div class="log-item">
+            <div class="log-content">
+                <p>Aucun log trouvé pour cette collection.</p>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %} 

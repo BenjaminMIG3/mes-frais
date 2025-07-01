@@ -1,0 +1,235 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}Tableau de bord des logs MongoDB{% endblock %}
+
+{% block extrastyle %}
+<style>
+    .logs-dashboard {
+        padding: 20px;
+        background: #f5f5f5;
+        min-height: 100vh;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    .stat-card {
+        background: #ffffff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .stat-number {
+        font-size: 2em;
+        font-weight: bold;
+        color: #2c3e50;
+    }
+    .stat-label {
+        color: #34495e;
+        margin-top: 5px;
+        font-weight: 500;
+    }
+    .logs-section {
+        background: #ffffff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .logs-header {
+        background: #34495e;
+        color: #ffffff;
+        padding: 15px 20px;
+        border-bottom: 1px solid #ddd;
+        font-weight: bold;
+    }
+    .logs-content {
+        padding: 20px;
+        background: #ffffff;
+    }
+    .log-item {
+        border-bottom: 1px solid #eee;
+        padding: 15px 0;
+        background: #ffffff;
+    }
+    .log-item:last-child {
+        border-bottom: none;
+    }
+    .log-timestamp {
+        color: #7f8c8d;
+        font-size: 0.9em;
+        font-weight: 500;
+    }
+    .log-event {
+        font-weight: bold;
+        color: #2c3e50;
+        font-size: 1.1em;
+        margin: 5px 0;
+    }
+    .log-user {
+        font-weight: 500;
+        margin: 5px 0;
+        color: #3498db;
+    }
+    .log-details {
+        margin-top: 8px;
+        font-size: 0.9em;
+        color: #34495e;
+        background: #f8f9fa;
+        padding: 8px;
+        border-radius: 4px;
+        border-left: 3px solid #3498db;
+    }
+    .nav-links {
+        margin-bottom: 20px;
+        background: #ffffff;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .nav-links a {
+        display: inline-block;
+        padding: 12px 18px;
+        margin-right: 10px;
+        background: #3498db;
+        color: #ffffff;
+        text-decoration: none;
+        border-radius: 5px;
+        font-weight: 500;
+        transition: background-color 0.3s ease;
+    }
+    .nav-links a:hover {
+        background: #2980b9;
+        color: #ffffff;
+    }
+    .error-log {
+        color: #e74c3c;
+        background: #fdf2f2;
+        border-left: 3px solid #e74c3c;
+    }
+    .success-log {
+        color: #27ae60;
+        background: #f0f9f0;
+        border-left: 3px solid #27ae60;
+    }
+    .warning-log {
+        color: #f39c12;
+        background: #fef9e7;
+        border-left: 3px solid #f39c12;
+    }
+    h1 {
+        color: #ffffff;
+        margin-bottom: 20px;
+        font-size: 2em;
+    }
+    .logs-header {
+        color: #ffffff;
+        margin-bottom: 20px;
+        font-size: 2em;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="logs-dashboard">
+    <h1 class="logs-header">📊 Tableau de bord des logs MongoDB</h1>
+    
+    <div class="nav-links">
+        <a href="{% url 'mongodb_logs:auth' %}">🔐 Logs d'authentification</a>
+        <a href="{% url 'mongodb_logs:crud' %}">📝 Logs CRUD</a>
+        <a href="{% url 'mongodb_logs:errors' %}">❌ Logs d'erreurs</a>
+        <a href="{% url 'mongodb_logs:business' %}">💼 Logs métier</a>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-number">{{ summary.auth_events|default:0 }}</div>
+            <div class="stat-label">Événements d'authentification</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ summary.crud_events|default:0 }}</div>
+            <div class="stat-label">Événements CRUD</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ summary.errors|default:0 }}</div>
+            <div class="stat-label">Erreurs</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ summary.business_events|default:0 }}</div>
+            <div class="stat-label">Événements métier</div>
+        </div>
+    </div>
+
+    <div class="logs-section">
+        <div class="logs-header">
+            🔐 Derniers événements d'authentification
+        </div>
+        <div class="logs-content">
+            {% for log in recent_auth %}
+            <div class="log-item">
+                <div class="log-timestamp">{{ log.timestamp_display }}</div>
+                <div class="log-event">{{ log.event_type }}</div>
+                <div class="log-user">{{ log.user_display|default:"Utilisateur anonyme" }}</div>
+                <div class="log-details">
+                    {% if log.request_display %}
+                        {{ log.request_display }}
+                    {% endif %}
+                </div>
+            </div>
+            {% empty %}
+            <p>Aucun événement d'authentification récent</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="logs-section">
+        <div class="logs-header">
+            ❌ Dernières erreurs
+        </div>
+        <div class="logs-content">
+            {% for log in recent_errors %}
+            <div class="log-item error-log">
+                <div class="log-timestamp">{{ log.timestamp_display }}</div>
+                <div class="log-event">{{ log.error_type }}: {{ log.error_message }}</div>
+                <div class="log-user">{{ log.user_display|default:"Utilisateur anonyme" }}</div>
+                <div class="log-details">
+                    {% if log.request_display %}
+                        {{ log.request_display }}
+                    {% endif %}
+                </div>
+            </div>
+            {% empty %}
+            <p>Aucune erreur récente</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="logs-section">
+        <div class="logs-header">
+            📝 Derniers événements CRUD
+        </div>
+        <div class="logs-content">
+            {% for log in recent_crud %}
+            <div class="log-item">
+                <div class="log-timestamp">{{ log.timestamp_display }}</div>
+                <div class="log-event">{{ log.event_type }} sur {{ log.model_name }}</div>
+                <div class="log-user">{{ log.user_display|default:"Utilisateur anonyme" }}</div>
+                <div class="log-details">
+                    {% if log.object_id %}
+                        ID: {{ log.object_id }}
+                    {% endif %}
+                </div>
+            </div>
+            {% empty %}
+            <p>Aucun événement CRUD récent</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %} 

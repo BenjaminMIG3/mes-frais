@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_extensions',
     'my_frais',
     'rest_framework',
     'auth_api',
@@ -63,6 +64,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'my_frais.middleware.LoggingMiddleware',
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -98,6 +100,16 @@ DATABASES = {
         'HOST': os.getenv('DB_HOST'),
         'PORT': os.getenv('DB_PORT'),
     }
+}
+
+# Configuration MongoDB pour les logs
+MONGODB_CONFIG = {
+    'host': os.getenv('MONGODB_HOST'),
+    'port': int(os.getenv('MONGODB_PORT')),
+    'database': os.getenv('MONGODB_DATABASE'),
+    'username': os.getenv('MONGODB_USERNAME'),
+    'password': os.getenv('MONGODB_PASSWORD'),
+    'auth_source': os.getenv('MONGODB_AUTH_SOURCE'),
 }
 
 # Password validation
