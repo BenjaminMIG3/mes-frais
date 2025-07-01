@@ -3,10 +3,10 @@ name: Django CI/CD
 on:
   push:
     branches:
-      - main
+      - dev
   pull_request:
     branches:
-      - main
+      - dev
   workflow_dispatch:
 
 jobs:
@@ -255,7 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Déploiement en Production
     needs: [build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
 
     steps:
       - name: Checkout code
@@ -275,7 +275,17 @@ jobs:
 
           ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
             cd ${{ secrets.PROJECT_PATH }}
-            git pull origin main
+            
+            # Mettre à jour la branche production avec les changements de dev
+            git fetch origin
+            git checkout production
+            git merge origin/dev --no-edit
+            git push origin production
+            
+            # Déployer depuis la branche production (qui contient les nouvelles modifs)
+            git checkout production
+            git pull origin production
+            
             source ${{ secrets.VENV_PATH }}/bin/activate
             pip install -r requirements.txt
             python manage.py migrate --noinput
@@ -292,7 +302,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Notification du Pipeline CI/CD
     needs: [test, build, deploy]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/dev'
     permissions:
       contents: write
       pull-requests: write
@@ -306,6 +316,7 @@ jobs:
           📋 Commit: ${{ github.sha }}
           👤 Auteur: ${{ github.actor }}
           📅 Date: $(date '+%Y-%m-%d %H:%M:%S UTC')
+          🌿 Branche source: dev → production
           
           "
           
@@ -353,6 +364,7 @@ jobs:
           if [ "${{ needs.deploy.result }}" == "success" ]; then
             NOTIFICATION_CONTENT+="✅ DÉPLOIEMENT: Réussi
             - Application déployée en production
+            - Branche production mise à jour depuis dev
             - Service redémarré avec succès
             - Mise à jour terminée
             "
@@ -398,7 +410,7 @@ jobs:
           echo "$NOTIFICATION_CONTENT"
 
       - name: Create deployment status comment
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/dev'
         uses: actions/github-script@v7
         with:
           script: |
@@ -437,7 +449,7 @@ jobs:
             }
 
       - name: Create deployment summary
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/dev'
         uses: actions/github-script@v7
         with:
           script: |
@@ -451,6 +463,7 @@ jobs:
             **Commit:** \`${{ github.sha }}\`
             **Auteur:** ${{ github.actor }}
             **Date:** ${new Date().toLocaleString('fr-FR')}
+            **Workflow:** dev → production
 
             ### 📊 Détails des étapes:
             - **Tests:** ${{ needs.test.result == 'success' && '✅' || '❌' }} ${{ needs.test.result }}
@@ -488,10 +501,10 @@ jobs:
           echo "   - Résumés de déploiement"
           echo "   - Logs détaillés dans GitHub Actions"
           
-          if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
+          if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/dev" ]; then
             echo "✅ Commentaire de statut ajouté au commit"
           else
-            echo "ℹ️  Commentaire de commit non ajouté (pas un push sur main)"
+            echo "ℹ️  Commentaire de commit non ajouté (pas un push sur dev)"
           fi
           
           echo ""
