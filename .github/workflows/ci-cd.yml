@@ -9,8 +9,10 @@ on:
       - main
 
 jobs:
-  test-and-deploy:
+  # Job 1: Tests unitaires et de qualité
+  test:
     runs-on: ubuntu-latest
+    name: Tests et Qualité du Code
 
     services:
       mysql:
@@ -59,16 +61,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
       - name: Create and activate virtualenv
         run: |
           python -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mysql-client
 
       - name: Install dependencies
         run: |
@@ -142,26 +144,78 @@ jobs:
           source venv/bin/activate
           python manage.py test
 
+  # Job 2: Build et validation du code
+  build:
+    runs-on: ubuntu-latest
+    name: Build et Collecte des Assets
+    needs: test  # Attend que les tests passent
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Create and activate virtualenv
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          source venv/bin/activate
+          pip install -r requirements.txt
+
       - name: Collect static files
         env:
           SECRET_KEY: test-secret-key-for-github-actions
-          DB_NAME: mes_frais
-          DB_USER: test_user
-          DB_PASSWORD: test_password
-          DB_HOST: localhost
-          DB_PORT: 3306
+          DB_NAME: sqlite_test
+          DB_USER: ""
+          DB_PASSWORD: ""
+          DB_HOST: ""
+          DB_PORT: ""
           MONGODB_HOST: localhost
           MONGODB_PORT: 27017
           MONGODB_DATABASE: mes_frais_logs
-          MONGODB_USERNAME: test_user
-          MONGODB_PASSWORD: test_password
-          MONGODB_AUTH_SOURCE: admin
+          MONGODB_USERNAME: ""
+          MONGODB_PASSWORD: ""
+          MONGODB_AUTH_SOURCE: ""
         run: |
           source venv/bin/activate
           python manage.py collectstatic --noinput
 
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            static/
+            venv/
+          key: ${{ runner.os }}-build-${{ github.sha }}
+
+  # Job 3: Déploiement sur le serveur
+  deploy:
+    runs-on: ubuntu-latest
+    name: Déploiement en Production
+    needs: [test, build]  # Attend que les tests et le build soient terminés
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Deploy to server
-        if: github.event_name == 'push'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
@@ -180,4 +234,26 @@ jobs:
             python manage.py migrate --noinput
             python manage.py collectstatic --noinput
             sudo systemctl restart ${{ secrets.SERVICE_NAME }}
+            
+            # Vérification que le service a bien redémarré
+            sleep 5
+            sudo systemctl status ${{ secrets.SERVICE_NAME }} --no-pager
           EOF
+
+  # Job 4: Notification du déploiement (optionnel)
+  notify:
+    runs-on: ubuntu-latest
+    name: Notification de Déploiement
+    needs: [deploy]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Notify deployment status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Déploiement réussi !"
+            echo "L'application a été mise à jour avec succès."
+          else
+            echo "❌ Échec du déploiement !"
+            echo "Veuillez vérifier les logs pour plus de détails."
+          fi
