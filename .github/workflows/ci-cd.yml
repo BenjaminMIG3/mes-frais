@@ -9,6 +9,8 @@ on:
       - dev
   workflow_dispatch:
 
+    # SZO?DZI?
+
 jobs:
   # Job 1: Tests unitaires et de qualité
   test:
