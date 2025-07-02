@@ -8,6 +8,7 @@ django-filter==24.1
 djangorestframework==3.16.0
 dnspython==2.6.1
 dotenv==0.9.9
+drf-yasg==1.21.7
 gunicorn==23.0.0
 mimesis==13.1.0
 mysqlclient==2.2.7

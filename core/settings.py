@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'my_frais',
     'rest_framework',
     'auth_api',
+    'drf_yasg',
 ]
 
 MIDDLEWARE = [
@@ -175,4 +176,16 @@ JWT_SETTINGS = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ALGORITHM': 'HS256',
     'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+# Configuration Swagger
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header'
+        }
+    },
+    'USE_SESSION_AUTH': False,
 }

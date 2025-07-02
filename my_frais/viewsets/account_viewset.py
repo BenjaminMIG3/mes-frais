@@ -13,10 +13,43 @@ from my_frais.serializers.account_serializer import AccountSerializer, AccountLi
 
 class AccountViewSet(viewsets.ModelViewSet):
     """
-    ViewSet pour la gestion des comptes bancaires.
-    
-    Permet de créer, lire, mettre à jour et supprimer des comptes.
-    Inclut des actions personnalisées pour les statistiques et la gestion du solde.
+    API endpoints pour gérer les comptes bancaires.
+
+    list:
+        Retourne la liste des comptes de l'utilisateur connecté.
+        Les administrateurs peuvent voir tous les comptes.
+        Supporte le filtrage, la recherche et le tri.
+
+    create:
+        Crée un nouveau compte bancaire.
+        L'utilisateur connecté sera automatiquement défini comme propriétaire.
+
+    retrieve:
+        Retourne les détails d'un compte spécifique.
+
+    update:
+        Met à jour un compte existant complètement.
+        Tous les champs doivent être fournis.
+
+    partial_update:
+        Met à jour un compte existant partiellement.
+        Seuls les champs fournis seront mis à jour.
+
+    delete:
+        Supprime un compte existant.
+
+    Filtres disponibles:
+        - user: ID de l'utilisateur propriétaire
+        - created_by: ID de l'utilisateur créateur
+
+    Champs de recherche:
+        - user__username: Nom d'utilisateur du propriétaire
+        - user__email: Email du propriétaire
+
+    Champs de tri:
+        - solde: Solde du compte
+        - created_at: Date de création
+        - updated_at: Date de mise à jour
     """
     queryset = Account.objects.all()
     serializer_class = AccountSerializer
@@ -75,7 +108,18 @@ class AccountViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'])
     def operations(self, request, pk=None):
-        """Récupérer toutes les opérations d'un compte"""
+        """
+        Retourne toutes les opérations d'un compte.
+
+        Fournit la liste complète des opérations associées à un compte spécifique,
+        triées par date de création décroissante.
+
+        Parameters:
+            pk (int): L'identifiant du compte
+
+        Returns:
+            Response: Liste des opérations avec des informations sur le compte
+        """
         account = self.get_object()
         operations = account.operations.select_related('created_by').all().order_by('-created_at')
         
@@ -91,7 +135,20 @@ class AccountViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'])
     def statistics(self, request, pk=None):
-        """Obtenir les statistiques d'un compte"""
+        """
+        Retourne les statistiques d'un compte.
+
+        Fournit des statistiques détaillées sur un compte spécifique, incluant :
+        - Statistiques des opérations
+        - Statistiques par période (30 jours)
+        - Informations sur les prélèvements automatiques
+
+        Parameters:
+            pk (int): L'identifiant du compte
+
+        Returns:
+            Response: Statistiques détaillées du compte
+        """
         account = self.get_object()
         
         # Statistiques des opérations
@@ -127,7 +184,24 @@ class AccountViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def adjust_balance(self, request, pk=None):
-        """Ajuster manuellement le solde d'un compte"""
+        """
+        Ajuste manuellement le solde d'un compte.
+
+        Permet de modifier le solde d'un compte et crée une opération
+        d'ajustement correspondante.
+
+        Parameters:
+            pk (int): L'identifiant du compte
+
+        Request Body:
+            {
+                "montant": decimal,
+                "raison": str (optionnel)
+            }
+
+        Returns:
+            Response: Détails de l'ajustement effectué
+        """
         account = self.get_object()
         montant = request.data.get('montant')
         raison = request.data.get('raison', 'Ajustement manuel')
@@ -199,7 +273,19 @@ class AccountViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def global_overview(self, request):
-        """Vue d'ensemble complète des comptes pour dashboard"""
+        """
+        Vue d'ensemble complète des comptes pour le dashboard.
+
+        Fournit une vue globale de tous les comptes accessibles, incluant :
+        - Statistiques de base (soldes, nombre de comptes)
+        - Détails par compte
+        - Statistiques d'activité récente
+        - Informations sur les prélèvements et revenus
+        - Alertes importantes
+
+        Returns:
+            Response: Vue d'ensemble complète des comptes
+        """
         accounts = self.get_queryset()
         
         # Statistiques de base

@@ -7,7 +7,7 @@ from django.db.models import Sum, Count, Q
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from my_frais.models import Operation, Account
+from my_frais.models import Operation, Account 
 from my_frais.serializers.operation_serializer import OperationSerializer, OperationListSerializer
 from my_frais.mongodb_service import mongodb_service
 from my_frais.logging_service import app_logger
@@ -15,10 +15,42 @@ from my_frais.logging_service import app_logger
 
 class OperationViewSet(viewsets.ModelViewSet):
     """
-    ViewSet pour la gestion des opérations financières.
-    
-    Permet de créer, lire, mettre à jour et supprimer des opérations.
-    Inclut des actions personnalisées pour les statistiques et la recherche.
+    API endpoints pour gérer les opérations financières.
+
+    list:
+        Retourne la liste des opérations de l'utilisateur connecté.
+        Les administrateurs peuvent voir toutes les opérations.
+        Supporte le filtrage, la recherche et le tri.
+
+    create:
+        Crée une nouvelle opération.
+        L'utilisateur connecté sera automatiquement défini comme créateur.
+
+    retrieve:
+        Retourne les détails d'une opération spécifique.
+
+    update:
+        Met à jour une opération existante complètement.
+        Tous les champs doivent être fournis.
+
+    partial_update:
+        Met à jour une opération existante partiellement.
+        Seuls les champs fournis seront mis à jour.
+
+    delete:
+        Supprime une opération existante.
+
+    Filtres disponibles:
+        - compte_reference: ID du compte
+        - created_by: ID de l'utilisateur créateur
+
+    Champs de recherche:
+        - description: Recherche dans la description de l'opération
+
+    Champs de tri:
+        - montant: Montant de l'opération
+        - created_at: Date de création
+        - updated_at: Date de mise à jour
     """
     queryset = Operation.objects.all()
     serializer_class = OperationSerializer
@@ -155,7 +187,19 @@ class OperationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def statistics(self, request):
-        """Obtenir les statistiques des opérations"""
+        """
+        Retourne les statistiques des opérations.
+
+        Fournit des statistiques détaillées sur les opérations, incluant :
+        - Nombre total d'opérations
+        - Montant total des opérations
+        - Statistiques sur 30 jours
+        - Statistiques sur 7 jours
+        - Répartition positif/négatif
+
+        Returns:
+            Response: Un objet contenant toutes les statistiques
+        """
         operations = self.get_queryset()
         
         # Statistiques générales
@@ -197,7 +241,17 @@ class OperationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def by_account(self, request):
-        """Obtenir les opérations groupées par compte"""
+        """
+        Retourne les opérations groupées par compte.
+
+        Fournit une vue agrégée des opérations par compte, incluant :
+        - Nombre d'opérations par compte
+        - Montant total par compte
+        - Liste détaillée des opérations de chaque compte
+
+        Returns:
+            Response: Liste des comptes avec leurs opérations associées
+        """
         operations = self.get_queryset()
         
         # Grouper par compte
@@ -232,7 +286,24 @@ class OperationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def search(self, request):
-        """Recherche avancée d'opérations"""
+        """
+        Recherche avancée d'opérations.
+
+        Permet une recherche avancée avec plusieurs critères :
+        - Texte libre (description ou nom d'utilisateur)
+        - Plage de montants (min/max)
+        - Plage de dates (début/fin)
+
+        Query Parameters:
+            q (str): Texte à rechercher dans la description
+            min_montant (decimal): Montant minimum
+            max_montant (decimal): Montant maximum
+            date_debut (date): Date de début (format YYYY-MM-DD)
+            date_fin (date): Date de fin (format YYYY-MM-DD)
+
+        Returns:
+            Response: Résultats de la recherche avec les filtres appliqués
+        """
         query = request.query_params.get('q', '')
         min_montant = request.query_params.get('min_montant')
         max_montant = request.query_params.get('max_montant')
@@ -289,7 +360,28 @@ class OperationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def bulk_create(self, request):
-        """Créer plusieurs opérations en lot"""
+        """
+        Crée plusieurs opérations en lot.
+
+        Permet de créer plusieurs opérations en une seule requête.
+        Les opérations invalides sont ignorées et retournées dans la liste des erreurs.
+
+        Request Body:
+            {
+                "operations": [
+                    {
+                        "compte_reference": int,
+                        "montant": decimal,
+                        "description": str,
+                        ...autres champs
+                    },
+                    ...
+                ]
+            }
+
+        Returns:
+            Response: Résumé des opérations créées et des erreurs éventuelles
+        """
         operations_data = request.data.get('operations', [])
         
         if not operations_data:
